@@ -6,7 +6,9 @@ import {
   calculatePercentChange,
   calculateSearchBaselineReadiness,
   calculateSearchConfidence,
+  calculateTrailingDailyGrowthStreak,
   hasLowBaseSearchGrowth,
+  normalizeConsecutiveGrowthDays,
   normalizeSearchAcceleration,
   normalizeSearchGrowth,
   normalizeSearchGrowthWithBaselineReadiness,
@@ -47,6 +49,7 @@ function buildMetadata(summary: SearchSignalSummary) {
     previous30dStart: summary.windows.previous30d.dateFrom,
     previous30dEnd: summary.windows.previous30d.dateTo,
     aliasCoveragePercent: summary.aliasCoveragePercent,
+    consecutiveGrowthDays: summary.consecutiveGrowthDays,
     hasSufficientData: summary.hasSufficientData,
   };
 }
@@ -65,6 +68,7 @@ export function buildSearchSignalsFromSeries(input: {
   const previous30d = averageSearchInterestForWindow(input.series.points, windows.previous30d);
   const change7dPercent = calculatePercentChange(current7d.interest, previous7d.interest);
   const previous7dChangePercent = calculatePercentChange(previous7d.interest, prior7d.interest);
+  const consecutiveGrowthDays = calculateTrailingDailyGrowthStreak(input.series.points, windows.current7d);
   const baselineReadiness = calculateSearchBaselineReadiness(previous7d.interest);
   const lowBaseGrowth = hasLowBaseSearchGrowth(previous7d.interest);
   const aliasCoveragePercent = calculateAliasCoveragePercent(input.series.points, input.series.aliases);
@@ -114,6 +118,7 @@ export function buildSearchSignalsFromSeries(input: {
     previous30dInterest: has30dWindows ? previous30d.interest : undefined,
     change30dPercent,
     accelerationPercent,
+    consecutiveGrowthDays: hasCurrentAndPrevious7d ? consecutiveGrowthDays : undefined,
     observationCount,
     aliasCoveragePercent,
     freshnessHours: calculateFreshnessHours(input.series, input.now),
@@ -239,6 +244,34 @@ export function buildSearchSignalsFromSeries(input: {
         providerMetric: "searchInterestAcceleration",
         engineField: "accelerationPercent",
         engineValue: accelerationPercent,
+        searchDerived: true,
+      },
+    });
+  }
+
+  if (hasCurrentAndPrevious7d) {
+    signals.push({
+      source: "searchWeb",
+      signalType: "growthVelocity",
+      productId: input.productId,
+      sourceProvenance: {
+        mode: "derived-live",
+        provider: "dataforseo_trends",
+        providerLabel: "DataForSEO Trends API",
+        providerMetric: "searchInterestConsecutiveGrowthDays",
+        approvalStatus: "not-required",
+        liveApiRequestMade: true,
+      },
+      value: consecutiveGrowthDays,
+      normalizedValue: normalizeConsecutiveGrowthDays(consecutiveGrowthDays),
+      sampleSize: observationCount,
+      timestamp: summary.timestamp,
+      confidence,
+      metadata: {
+        ...metadata,
+        providerMetric: "searchInterestConsecutiveGrowthDays",
+        engineField: "consecutiveGrowthDays",
+        engineValue: consecutiveGrowthDays,
         searchDerived: true,
       },
     });

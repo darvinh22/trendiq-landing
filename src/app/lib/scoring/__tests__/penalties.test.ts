@@ -63,6 +63,19 @@ const baseComponents: TrendIQScoreComponents = {
 };
 
 describe("penalties", () => {
+  function volatileGrowthPenalty(input: Partial<TrendIQSignalInputs["growthVelocity"]>) {
+    return calculateScorePenalties(
+      {
+        ...baseSignals,
+        growthVelocity: {
+          ...baseSignals.growthVelocity,
+          ...input,
+        },
+      },
+      baseComponents
+    ).find((item) => item.id === "volatile_growth");
+  }
+
   it("does not penalize balanced signals", () => {
     expect(calculateScorePenalties(baseSignals, baseComponents)).toEqual([]);
   });
@@ -95,5 +108,40 @@ describe("penalties", () => {
     });
 
     expect(penalties.some((item) => item.id === "sentiment_drag")).toBe(true);
+  });
+
+  it("penalizes positive acceleration with a short growth streak", () => {
+    expect(volatileGrowthPenalty({
+      accelerationPercent: 100,
+      consecutiveGrowthDays: 2,
+    })?.points).toBe(2.14);
+  });
+
+  it("does not penalize positive acceleration with a durable growth streak", () => {
+    expect(volatileGrowthPenalty({
+      accelerationPercent: 100,
+      consecutiveGrowthDays: 3,
+    })).toBeUndefined();
+  });
+
+  it("does not penalize sharp negative acceleration with a short streak", () => {
+    expect(volatileGrowthPenalty({
+      accelerationPercent: -165.6,
+      consecutiveGrowthDays: 0,
+    })).toBeUndefined();
+  });
+
+  it("does not penalize stable acceleration", () => {
+    expect(volatileGrowthPenalty({
+      accelerationPercent: 0,
+      consecutiveGrowthDays: 0,
+    })).toBeUndefined();
+  });
+
+  it("caps volatile growth at five points for very high positive acceleration", () => {
+    expect(volatileGrowthPenalty({
+      accelerationPercent: 180,
+      consecutiveGrowthDays: 1,
+    })?.points).toBe(5);
   });
 });

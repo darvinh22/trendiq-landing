@@ -84,6 +84,7 @@ describe("live data audit", () => {
     expect(audit?.liveCoveragePercent).toBeLessThan(100);
     expect(audit?.liveComponents).toEqual(["searchMomentum", "growthVelocity"]);
     expect(audit?.mockFallbackComponents).toContain("searchMomentum");
+    expect(audit?.mockFallbackComponents).not.toContain("growthVelocity");
     expect(audit?.mockFallbackComponents).toContain("sentiment");
     expect(audit?.weightedLiveIQContribution).toBeGreaterThan(0);
     expect(audit?.weightedMockFallbackIQContribution).toBeGreaterThan(0);
@@ -101,18 +102,25 @@ describe("live data audit", () => {
     expect(growthComponent?.fields.find((field) =>
       field.engineField === "trendChangePercent"
     )?.provenance).toBe("derived-live");
+    expect(growthComponent?.fields.find((field) =>
+      field.engineField === "accelerationPercent"
+    )?.provenance).toBe("derived-live");
+    expect(growthComponent?.fields.find((field) =>
+      field.engineField === "consecutiveGrowthDays"
+    )?.provenance).toBe("derived-live");
   });
 
-  it("marks aggregates that combine DataForSEO and mock/social data as derived-mixed", () => {
+  it("marks only components that still combine live and fallback fields as derived-mixed", () => {
     const searchComponent = VALIDATED_RAY_BAN_META_LIVE_SNAPSHOT.liveDataAudit?.componentSummaries
       .find((component) => component.component === "searchMomentum");
     const growthComponent = VALIDATED_RAY_BAN_META_LIVE_SNAPSHOT.liveDataAudit?.componentSummaries
       .find((component) => component.component === "growthVelocity");
 
     expect(searchComponent?.provenance).toBe("derived-mixed");
-    expect(growthComponent?.provenance).toBe("derived-mixed");
+    expect(growthComponent?.provenance).toBe("derived-live");
+    expect(growthComponent?.liveCoveragePercent).toBe(100);
     expect(growthComponent?.fields.find((field) =>
       field.engineField === "accelerationPercent"
-    )?.provenance).toBe("derived-mixed");
+    )?.provenance).toBe("derived-live");
   });
 });

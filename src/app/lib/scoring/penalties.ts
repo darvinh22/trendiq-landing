@@ -50,14 +50,14 @@ export function calculateScorePenalties(input: TrendIQSignalInputs, components: 
     );
   }
 
-  if (Math.abs(input.growthVelocity.accelerationPercent) >= 70 && input.growthVelocity.consecutiveGrowthDays < 3) {
+  if (input.growthVelocity.accelerationPercent >= 70 && input.growthVelocity.consecutiveGrowthDays < 3) {
     // A sharp acceleration with fewer than three growth days is treated as a
     // spike risk instead of durable momentum. Max impact is 5 points.
     penalties.push(
       penalty(
         "volatile_growth",
         "Volatile growth",
-        normalizeLinear(Math.abs(input.growthVelocity.accelerationPercent), 70, 140) * 5 / 100,
+        normalizeLinear(input.growthVelocity.accelerationPercent, 70, 140) * 5 / 100,
         "Growth is sharp but too brief to fully trust."
       )
     );

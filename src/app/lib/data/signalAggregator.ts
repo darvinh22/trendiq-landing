@@ -139,6 +139,44 @@ function isSearchDerivedSignal(signal: NormalizedTrendSignal): boolean {
   return signal.metadata?.searchDerived === true || signal.metadata?.provider === "dataforseo_trends";
 }
 
+const SEARCH_DERIVED_GROWTH_VELOCITY_FIELDS = new Set([
+  "trendChangePercent",
+  "accelerationPercent",
+  "consecutiveGrowthDays",
+]);
+
+function isSupersedingSearchGrowthVelocitySignal(signal: NormalizedTrendSignal): boolean {
+  const engineField = signal.metadata?.engineField;
+
+  return (
+    signal.signalType === "growthVelocity" &&
+    typeof engineField === "string" &&
+    SEARCH_DERIVED_GROWTH_VELOCITY_FIELDS.has(engineField) &&
+    signalProvenanceMode(signal) === "derived-live" &&
+    isSearchDerivedSignal(signal)
+  );
+}
+
+function selectSignalsForAggregation(signals: NormalizedTrendSignal[]): NormalizedTrendSignal[] {
+  const supersededKeys = new Set(
+    signals
+      .filter(isSupersedingSearchGrowthVelocitySignal)
+      .map((signal) => signalKey(signal.signalType, String(signal.metadata?.engineField)))
+  );
+
+  if (!supersededKeys.size) return signals;
+
+  return signals.filter((signal) => {
+    const engineField = signal.metadata?.engineField;
+    if (typeof engineField !== "string") return true;
+    if (!supersededKeys.has(signalKey(signal.signalType, engineField))) return true;
+    if (isSupersedingSearchGrowthVelocitySignal(signal)) return true;
+
+    const provenanceMode = signalProvenanceMode(signal);
+    return provenanceMode !== "mock" && provenanceMode !== "fallback";
+  });
+}
+
 function optionalAveragePreviousValue(signals: NormalizedTrendSignal[], providerMetric: string): number | undefined {
   const fieldValues = signals
     .filter((signal) =>
@@ -246,7 +284,7 @@ export function aggregateSignals(
   rawSignals: NormalizedTrendSignal[],
   timestamp = new Date().toISOString()
 ): AggregatedSignalResult {
-  const productSignals = rawSignals.filter((signal) => signal.productId === productId);
+  const productSignals = selectSignalsForAggregation(rawSignals.filter((signal) => signal.productId === productId));
   const values = buildEngineValueMap(productSignals);
   const previous7dRelativeInterest =
     optionalAverageMetadataNumber(productSignals, "previous7dRelativeInterest") ??

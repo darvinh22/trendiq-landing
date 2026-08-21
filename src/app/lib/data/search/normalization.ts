@@ -56,6 +56,10 @@ function parsePointMidpoint(point: SearchInterestPoint): number {
   return startMs + (endMs - startMs) / 2;
 }
 
+function parsePointStart(point: SearchInterestPoint): number {
+  return Date.parse(`${point.dateFrom}T00:00:00.000Z`);
+}
+
 function average(values: number[]): number {
   if (!values.length) return 0;
   return roundTo(values.reduce((sum, value) => sum + value, 0) / values.length, 2);
@@ -86,6 +90,44 @@ export function averageSearchInterestForWindow(
     interest: average(scoped.map(pointAverage)),
     pointCount: scoped.length,
   };
+}
+
+export function calculateTrailingDailyGrowthStreak(
+  points: SearchInterestPoint[],
+  window: SearchInterestWindow
+): number {
+  const startMs = Date.parse(`${window.dateFrom}T00:00:00.000Z`);
+  const endMs = Date.parse(`${window.dateTo}T23:59:59.999Z`);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return 0;
+
+  const scoped = points
+    .filter((point) => {
+      const pointStart = parsePointStart(point);
+      return (
+        Number.isFinite(pointStart) &&
+        pointStart >= startMs - DAY_MS &&
+        pointStart <= endMs &&
+        !point.missingData
+      );
+    })
+    .map((point) => ({
+      dateMs: parsePointStart(point),
+      interest: pointAverage(point),
+    }))
+    .filter((point) => Number.isFinite(point.dateMs) && Number.isFinite(point.interest))
+    .sort((a, b) => a.dateMs - b.dateMs);
+  const latestIndex = scoped.findLastIndex((point) => point.dateMs >= startMs && point.dateMs <= endMs);
+  if (latestIndex < 0) return 0;
+
+  let streak = 0;
+  for (let index = latestIndex; index > 0 && streak < 7; index -= 1) {
+    const current = scoped[index];
+    const previous = scoped[index - 1];
+    if (current.dateMs - previous.dateMs !== DAY_MS || current.interest <= previous.interest) break;
+    streak += 1;
+  }
+
+  return streak;
 }
 
 export function calculateAliasCoveragePercent(points: SearchInterestPoint[], aliases: readonly string[]): number {
@@ -161,4 +203,8 @@ export function normalizeSearchAcceleration(value: number): number {
   // Acceleration follows the v1 growth velocity assumption: -40% to +60% spans
   // sharp slowdown through fast acceleration.
   return roundTo(normalizeLinear(value, -40, 60), 2);
+}
+
+export function normalizeConsecutiveGrowthDays(value: number): number {
+  return roundTo(normalizeLinear(value, 0, 7), 2);
 }

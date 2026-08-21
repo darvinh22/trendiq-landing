@@ -131,6 +131,8 @@ describe("SearchTrendSignalProvider", () => {
     expect(byEngineField.get("searchGrowthPercent")?.metadata?.provider).toBe("dataforseo_trends");
     expect(byEngineField.get("trendChangePercent")?.metadata?.provider).toBe("dataforseo_trends");
     expect(byEngineField.get("accelerationPercent")?.metadata?.provider).toBe("dataforseo_trends");
+    expect(byEngineField.get("consecutiveGrowthDays")?.metadata?.provider).toBe("dataforseo_trends");
+    expect(byEngineField.get("consecutiveGrowthDays")?.sourceProvenance.mode).toBe("derived-live");
     expect(provider.getDebugSummary(RAY_BAN_META_PRODUCT_ID)?.current7dInterest).toBe(7.29);
   });
 
@@ -176,10 +178,47 @@ describe("SearchTrendSignalProvider", () => {
 
     expect(snapshot.aggregatedSignals.searchMomentum.searchVolume7d).toBe(185000);
     expect(snapshot.aggregatedSignals.searchMomentum.searchGrowthPercent).toBe(-82.8);
+    expect(snapshot.aggregatedSignals.growthVelocity.trendChangePercent).toBe(-82.8);
+    expect(snapshot.aggregatedSignals.growthVelocity.accelerationPercent).toBe(-165.6);
+    expect(snapshot.aggregatedSignals.growthVelocity.consecutiveGrowthDays).toBe(0);
+    expect(snapshot.aggregatedSignals.growthVelocity.nonSearchAccelerationPercent).toBeUndefined();
     expect(snapshot.aggregatedSignals.sentiment.positiveMentionPercent).toBe(74);
     expect(snapshot.aggregatedSignals.reviewQuality.averageRating).toBe(4.4);
     expect(snapshot.aggregatedSignals.purchaseIntent.buyingKeywordSharePercent).toBe(26);
     expect(snapshot.trendIQScore.scoreVersion).toBe("v1.1");
     expect(snapshot.trendIQScore.score).toBeGreaterThan(0);
+
+    const growthComponent = snapshot.liveDataAudit?.componentSummaries.find((component) =>
+      component.component === "growthVelocity"
+    );
+    expect(growthComponent?.fields.every((field) => field.provenance === "derived-live")).toBe(true);
+    expect(growthComponent?.liveCoveragePercent).toBe(100);
+  });
+
+  it("keeps mock Growth Velocity fields when live Search Interest is insufficient", async () => {
+    const client = new FixtureSearchClient(fixtureSeries([
+      point("2026-08-06", "2026-08-12", [70, 0, 0, 0]),
+    ]));
+    const searchProvider = new SearchTrendSignalProvider(readSearchProviderConfig({}, {
+      ...liveConfig(),
+      minSampleSize: 8,
+    }), {
+      client,
+    });
+    const snapshot = await buildProductTrendSnapshotAsync(
+      RAY_BAN_META_PRODUCT_ID,
+      [searchProvider, redditProvider, reviewsProvider, socialProvider, merchantProvider],
+      { timestamp: now.toISOString() }
+    );
+
+    expect(snapshot.aggregatedSignals.growthVelocity.trendChangePercent).toBe(34.2);
+    expect(snapshot.aggregatedSignals.growthVelocity.accelerationPercent).toBe(18);
+    expect(snapshot.aggregatedSignals.growthVelocity.consecutiveGrowthDays).toBe(5);
+
+    const growthComponent = snapshot.liveDataAudit?.componentSummaries.find((component) =>
+      component.component === "growthVelocity"
+    );
+    expect(growthComponent?.provenance).toBe("mock");
+    expect(growthComponent?.liveCoveragePercent).toBe(0);
   });
 });

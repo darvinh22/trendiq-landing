@@ -75,6 +75,7 @@ export interface SearchSignalSummary {
   previous30dInterest?: number;
   change30dPercent?: number;
   accelerationPercent?: number;
+  consecutiveGrowthDays?: number;
   baselineReadiness: number;
   lowBaseGrowth: boolean;
   observationCount: number;

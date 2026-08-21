@@ -80,6 +80,9 @@ describe("search signal builder", () => {
     const searchGrowth = result.signals.find((signal) => signal.metadata?.engineField === "searchGrowthPercent");
     const trendChange = result.signals.find((signal) => signal.metadata?.engineField === "trendChangePercent");
     const acceleration = result.signals.find((signal) => signal.metadata?.engineField === "accelerationPercent");
+    const consecutiveGrowthDays = result.signals.find((signal) =>
+      signal.metadata?.engineField === "consecutiveGrowthDays"
+    );
 
     expect(result.summary.current7dInterest).toBe(7.29);
     expect(result.summary.previous7dInterest).toBe(42.29);
@@ -90,6 +93,7 @@ describe("search signal builder", () => {
     expect(result.summary.previous7dChangePercent).toBe(82.8);
     expect(result.summary.change30dPercent).toBeUndefined();
     expect(result.summary.accelerationPercent).toBeCloseTo(-165.6);
+    expect(result.summary.consecutiveGrowthDays).toBe(0);
     expect(result.summary.hasSufficientData).toBe(true);
     expect(searchGrowth?.metadata?.engineValue).toBe(-82.8);
     expect(searchGrowth?.metadata?.providerMetric).toBe("searchInterestGrowth7d");
@@ -97,6 +101,10 @@ describe("search signal builder", () => {
     expect(trendChange?.metadata?.searchDerived).toBe(true);
     expect(acceleration?.metadata?.engineValue).toBeCloseTo(-165.6);
     expect(acceleration?.metadata?.searchDerived).toBe(true);
+    expect(consecutiveGrowthDays?.metadata?.engineValue).toBe(0);
+    expect(consecutiveGrowthDays?.metadata?.providerMetric).toBe("searchInterestConsecutiveGrowthDays");
+    expect(consecutiveGrowthDays?.sourceProvenance.mode).toBe("derived-live");
+    expect(consecutiveGrowthDays?.metadata?.searchDerived).toBe(true);
 
     for (const signal of result.signals) {
       expect(signal.source).toBe("searchWeb");
@@ -105,6 +113,28 @@ describe("search signal builder", () => {
       expect(signal.metadata?.provider).toBe("dataforseo_trends");
       expect(signal.metadata?.aliasesUsed).toContain("Ray-Ban Meta");
     }
+  });
+
+  it("calculates trailing consecutive growth days from the live daily series", () => {
+    const result = buildSearchSignalsFromSeries({
+      productId: "ray-ban-meta",
+      series: series([
+        ...["2026-07-30", "2026-07-31", "2026-08-01", "2026-08-02", "2026-08-03", "2026-08-04", "2026-08-05"]
+          .map((date, index) => point(date, date, [index + 1])),
+        ...["2026-08-06", "2026-08-07", "2026-08-08", "2026-08-09", "2026-08-10", "2026-08-11", "2026-08-12"]
+          .map((date, index) => point(date, date, [index + 8])),
+      ]),
+      now,
+      minSampleSize: 2,
+    });
+    const consecutiveGrowthDays = result.signals.find((signal) =>
+      signal.metadata?.providerMetric === "searchInterestConsecutiveGrowthDays"
+    );
+
+    expect(result.summary.consecutiveGrowthDays).toBe(7);
+    expect(consecutiveGrowthDays?.metadata?.engineField).toBe("consecutiveGrowthDays");
+    expect(consecutiveGrowthDays?.metadata?.engineValue).toBe(7);
+    expect(consecutiveGrowthDays?.normalizedValue).toBe(100);
   });
 
   it("omits live acceleration when the prior 7-day window is unavailable", () => {
@@ -132,8 +162,10 @@ describe("search signal builder", () => {
 
     expect(result.summary.hasSufficientData).toBe(true);
     expect(result.summary.accelerationPercent).toBeUndefined();
+    expect(result.summary.consecutiveGrowthDays).toBe(0);
     expect(result.signals.some((signal) => signal.metadata?.engineField === "accelerationPercent")).toBe(false);
     expect(result.signals.some((signal) => signal.metadata?.engineField === "trendChangePercent")).toBe(true);
+    expect(result.signals.some((signal) => signal.metadata?.engineField === "consecutiveGrowthDays")).toBe(true);
   });
 
   it("marks Ray-Ban low-base growth as provisional and reduces provider-normalized growth credit", () => {
