@@ -1,0 +1,3 @@
+[submodule "trendiq-landing"]
+	path = trendiq-landing
+	url = https://github.com/darvinh22/trendiq-landing.git
