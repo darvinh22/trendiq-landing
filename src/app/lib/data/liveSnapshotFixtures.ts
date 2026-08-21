@@ -8,11 +8,15 @@ import { reviewsProvider } from "./providers/reviewsProvider";
 import { socialProvider } from "./providers/socialProvider";
 import { aggregateSignals } from "./signalAggregator";
 import { buildTrendIQSnapshotProvenanceSummary } from "./liveDataAudit";
-import { mapDataForSeoTrendsResponse } from "./search/client";
+import {
+  DATAFORSEO_GOOGLE_ADS_SEARCH_VOLUME_PATH,
+  mapDataForSeoGoogleAdsSearchVolumeResponse,
+  mapDataForSeoTrendsResponse,
+} from "./search/client";
 import { readSearchProviderConfig } from "./search/config";
 import { mockSearchProvider } from "./search/mockSearchProvider";
 import { mergeLiveSignalsWithMockFallback } from "./search/provider";
-import { buildSearchSignalsFromSeries } from "./search/signalBuilder";
+import { buildSearchSignalsFromSeries, buildSearchVolumeSignalsFromSeries } from "./search/signalBuilder";
 import { createLocalTrendSnapshotStore } from "./snapshotStore";
 import type { ProductTrendSnapshot } from "./types";
 
@@ -82,6 +86,44 @@ export const VALIDATED_RAY_BAN_META_DATAFORSEO_RESPONSE = {
   ],
 } as const;
 
+// Sanitized fixture captured from a DataForSEO Google Ads Search Volume Live
+// validation. This response contains no credentials or Authorization headers.
+export const VALIDATED_RAY_BAN_META_DATAFORSEO_SEARCH_VOLUME_RESPONSE = {
+  status_code: 20000,
+  status_message: "Ok.",
+  tasks_error: 0,
+  tasks: [
+    {
+      status_code: 20000,
+      status_message: "Ok.",
+      cost: 0.09,
+      result_count: 1,
+      result: [
+        {
+          keyword: "Ray-Ban Meta",
+          location_code: 2840,
+          language_code: "en",
+          search_volume: 301000,
+          monthly_searches: [
+            { year: 2026, month: 7, search_volume: 246000 },
+            { year: 2026, month: 6, search_volume: 301000 },
+            { year: 2026, month: 5, search_volume: 301000 },
+            { year: 2026, month: 4, search_volume: 301000 },
+            { year: 2026, month: 3, search_volume: 246000 },
+            { year: 2026, month: 2, search_volume: 301000 },
+            { year: 2026, month: 1, search_volume: 301000 },
+            { year: 2025, month: 12, search_volume: 550000 },
+            { year: 2025, month: 11, search_volume: 450000 },
+            { year: 2025, month: 10, search_volume: 301000 },
+            { year: 2025, month: 9, search_volume: 368000 },
+            { year: 2025, month: 8, search_volume: 301000 },
+          ],
+        },
+      ],
+    },
+  ],
+} as const;
+
 export function buildValidatedRayBanMetaLiveSnapshot(): ProductTrendSnapshot {
   const timestamp = VALIDATED_RAY_BAN_META_LIVE_TIMESTAMP;
   const now = new Date(timestamp);
@@ -104,8 +146,22 @@ export function buildValidatedRayBanMetaLiveSnapshot(): ProductTrendSnapshot {
     now,
     minSampleSize: config.minSampleSize,
   });
+  const volumeSeries = mapDataForSeoGoogleAdsSearchVolumeResponse({
+    response: VALIDATED_RAY_BAN_META_DATAFORSEO_SEARCH_VOLUME_RESPONSE,
+    productId: RAY_BAN_META_PRODUCT_ID,
+    aliases: config.productQueries[RAY_BAN_META_PRODUCT_ID].aliases,
+    locationCode: config.locationCode,
+    languageCode: config.languageCode,
+    fetchedAt: timestamp,
+    endpoint: DATAFORSEO_GOOGLE_ADS_SEARCH_VOLUME_PATH,
+  });
+  const liveVolumeSignals = buildSearchVolumeSignalsFromSeries({
+    productId: RAY_BAN_META_PRODUCT_ID,
+    series: volumeSeries,
+    now,
+  });
   const searchSignals = mergeLiveSignalsWithMockFallback(
-    liveSearchResult.signals,
+    [...liveSearchResult.signals, ...liveVolumeSignals],
     mockSearchProvider.getSignals(RAY_BAN_META_PRODUCT_ID)
   );
   const rawSignals = [

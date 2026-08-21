@@ -26,6 +26,7 @@ export interface SearchProviderConfig {
   cacheTtlMs: number;
   minSampleSize: number;
   locationCode: number;
+  languageCode: string;
   interestType: SearchInterestType;
   timeRange: SearchInterestTimeRange;
   productQueries: Record<string, SearchProductQueryConfig>;
@@ -56,6 +57,33 @@ export interface SearchInterestSeries {
   cost?: number;
   points: SearchInterestPoint[];
   averagesByAlias: Record<string, number>;
+}
+
+export interface SearchVolumeMonthlyPoint {
+  year: number;
+  month: number;
+  searchVolume: number;
+}
+
+export interface SearchVolumeObservation {
+  keyword: string;
+  locationCode: number;
+  languageCode?: string;
+  monthlySearchVolume: number;
+  monthlySearches: SearchVolumeMonthlyPoint[];
+}
+
+export interface SearchVolumeSeries {
+  provider: SearchProviderVendor;
+  productId: string;
+  aliases: string[];
+  locationCode: number;
+  languageCode?: string;
+  fetchedAt: string;
+  cost?: number;
+  endpoint: string;
+  monthlySearchVolume: number;
+  observations: SearchVolumeObservation[];
 }
 
 export interface SearchSignalSummary {
@@ -105,4 +133,13 @@ export interface SearchInterestClient {
     interestType: SearchInterestType;
     timeRange: SearchInterestTimeRange;
   }): Promise<SearchInterestSeries>;
+}
+
+export interface SearchVolumeClient {
+  getSearchVolume(input: {
+    productId: string;
+    aliases: string[];
+    locationCode: number;
+    languageCode: string;
+  }): Promise<SearchVolumeSeries>;
 }

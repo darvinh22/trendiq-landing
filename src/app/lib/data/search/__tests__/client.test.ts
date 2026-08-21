@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  DATAFORSEO_GOOGLE_ADS_SEARCH_VOLUME_PATH,
   DATAFORSEO_TRENDS_EXPLORE_PATH,
+  DataForSeoGoogleAdsSearchVolumeClient,
   DataForSeoTrendsClient,
+  mapDataForSeoGoogleAdsSearchVolumeResponse,
   mapDataForSeoTrendsResponse,
   SearchProviderError,
   type FetchLike,
@@ -39,6 +42,35 @@ function fixtureResponse() {
                   },
                 ],
               },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function volumeFixtureResponse() {
+  return {
+    version: "0.1",
+    status_code: 20000,
+    status_message: "Ok.",
+    tasks_error: 0,
+    tasks: [
+      {
+        status_code: 20000,
+        status_message: "Ok.",
+        cost: 0.075,
+        result_count: 1,
+        result: [
+          {
+            keyword: "Ray-Ban Meta",
+            location_code: 2840,
+            language_code: "en",
+            search_volume: 30000,
+            monthly_searches: [
+              { year: 2026, month: 7, search_volume: 30000 },
+              { year: 2026, month: 6, search_volume: 27100 },
             ],
           },
         ],
@@ -283,5 +315,101 @@ describe("DataForSeoTrendsClient", () => {
     });
     expect(caught?.diagnostics?.requestPayload?.[0].tag).toBe("trendiq:ray-ban-meta:search-interest");
     expect(JSON.stringify(caught?.diagnostics)).not.toContain("sensitive-password");
+  });
+});
+
+describe("DataForSeoGoogleAdsSearchVolumeClient", () => {
+  it("maps Google Ads Search Volume responses into monthly search-volume observations", () => {
+    const series = mapDataForSeoGoogleAdsSearchVolumeResponse({
+      response: volumeFixtureResponse(),
+      productId: "ray-ban-meta",
+      aliases: ["Ray-Ban Meta"],
+      locationCode: 2840,
+      languageCode: "en",
+      fetchedAt: "2026-08-12T00:00:00.000Z",
+      endpoint: DATAFORSEO_GOOGLE_ADS_SEARCH_VOLUME_PATH,
+    });
+
+    expect(series.provider).toBe("dataforseo");
+    expect(series.cost).toBe(0.075);
+    expect(series.endpoint).toBe(DATAFORSEO_GOOGLE_ADS_SEARCH_VOLUME_PATH);
+    expect(series.monthlySearchVolume).toBe(30000);
+    expect(series.observations[0]).toMatchObject({
+      keyword: "Ray-Ban Meta",
+      locationCode: 2840,
+      languageCode: "en",
+      monthlySearchVolume: 30000,
+    });
+    expect(series.observations[0].monthlySearches[0]).toEqual({
+      year: 2026,
+      month: 7,
+      searchVolume: 30000,
+    });
+  });
+
+  it("uses the DataForSEO Google Ads Search Volume endpoint with sanitized credentials", async () => {
+    const calls: Array<{ url: string; auth?: string; body?: string }> = [];
+    const fetchImpl: FetchLike = async (url, init) => {
+      calls.push({
+        url,
+        auth: init?.headers?.Authorization,
+        body: init?.body,
+      });
+      return response(volumeFixtureResponse());
+    };
+    const config = readSearchProviderConfig({}, {
+      mode: "live",
+      apiLogin: "login",
+      apiPassword: "password",
+      apiBaseUrl: "https://api.dataforseo.com",
+      now: () => new Date("2026-08-12T00:00:00.000Z"),
+    });
+    const client = new DataForSeoGoogleAdsSearchVolumeClient(config, fetchImpl);
+
+    await client.getSearchVolume({
+      productId: "ray-ban-meta",
+      aliases: ["Ray-Ban Meta"],
+      locationCode: 2840,
+      languageCode: "en",
+    });
+
+    expect(calls[0].url).toBe(`https://api.dataforseo.com${DATAFORSEO_GOOGLE_ADS_SEARCH_VOLUME_PATH}`);
+    expect(calls[0].auth).toMatch(/^Basic /);
+
+    const requestBody = JSON.parse(calls[0].body ?? "null");
+    expect(requestBody).toEqual([
+      {
+        keywords: ["Ray-Ban Meta"],
+        location_code: 2840,
+        language_code: "en",
+        search_partners: false,
+        tag: "trendiq:ray-ban-meta:search-volume",
+      },
+    ]);
+  });
+
+  it("rejects Google Ads Search Volume responses without usable volume", () => {
+    expect(() => mapDataForSeoGoogleAdsSearchVolumeResponse({
+      response: {
+        ...volumeFixtureResponse(),
+        tasks: [
+          {
+            status_code: 20000,
+            status_message: "Ok.",
+            result: [
+              {
+                keyword: "Ray-Ban Meta",
+                search_volume: null,
+              },
+            ],
+          },
+        ],
+      },
+      productId: "ray-ban-meta",
+      aliases: ["Ray-Ban Meta"],
+      locationCode: 2840,
+      languageCode: "en",
+      fetchedAt: "2026-08-12T00:00:00.000Z",
+    })).toThrow("usable monthly search volume");
   });
 });

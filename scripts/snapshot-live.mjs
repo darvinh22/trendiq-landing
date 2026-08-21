@@ -109,14 +109,15 @@ try {
 
   const countedFetch = async (url, init) => {
     liveApiRequestsMade += 1;
-    if (liveApiRequestsMade > 1) {
-      throw new Error("Daily live snapshot runner blocked a second DataForSEO request.");
+    if (liveApiRequestsMade > 2) {
+      throw new Error("Daily live snapshot runner blocked more than two DataForSEO requests.");
     }
 
     return fetch(url, init);
   };
   const client = new searchClientModule.DataForSeoTrendsClient(config, countedFetch);
-  const searchProvider = new searchProviderModule.SearchTrendSignalProvider(config, { client });
+  const volumeClient = new searchClientModule.DataForSeoGoogleAdsSearchVolumeClient(config, countedFetch);
+  const searchProvider = new searchProviderModule.SearchTrendSignalProvider(config, { client, volumeClient });
   const result = await dailyRunnerModule.runDailyLiveSnapshot({
     productId,
     store,

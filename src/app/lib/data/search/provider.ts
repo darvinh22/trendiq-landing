@@ -1,10 +1,10 @@
 import { InMemorySearchCache, type SearchCache } from "./cache";
-import { DataForSeoTrendsClient } from "./client";
+import { DataForSeoGoogleAdsSearchVolumeClient, DataForSeoTrendsClient } from "./client";
 import { readSearchProviderConfig, shouldUseLiveSearch } from "./config";
 import { mockSearchProvider } from "./mockSearchProvider";
 import { buildSearchWindows } from "./normalization";
-import { buildSearchSignalsFromSeries } from "./signalBuilder";
-import type { SearchInterestClient, SearchProviderConfig, SearchSignalBuildResult } from "./types";
+import { buildSearchSignalsFromSeries, buildSearchVolumeSignalsFromSeries } from "./signalBuilder";
+import type { SearchInterestClient, SearchProviderConfig, SearchSignalBuildResult, SearchVolumeClient } from "./types";
 import type { AsyncTrendSignalProvider, NormalizedTrendSignal, TrendSignalProvider } from "../types";
 
 const source = "searchWeb" as const;
@@ -12,6 +12,7 @@ const label = "Search/Web interest";
 
 export interface SearchTrendSignalProviderDependencies {
   client?: SearchInterestClient;
+  volumeClient?: SearchVolumeClient;
   cache?: SearchCache<SearchSignalBuildResult>;
   fallbackProvider?: TrendSignalProvider;
 }
@@ -109,8 +110,14 @@ export class SearchTrendSignalProvider implements AsyncTrendSignalProvider {
         return this.fallbackProvider.getSignals(productId);
       }
 
-      this.cache.set(cacheKey, result, this.config.cacheTtlMs, this.config.now().getTime());
-      return mergeLiveSignalsWithMockFallback(result.signals, this.fallbackProvider.getSignals(productId));
+      const volumeSignals = await this.getVolumeSignals(productId, productConfig.aliases, now);
+      const resultWithVolume: SearchSignalBuildResult = {
+        ...result,
+        signals: [...result.signals, ...volumeSignals],
+      };
+
+      this.cache.set(cacheKey, resultWithVolume, this.config.cacheTtlMs, this.config.now().getTime());
+      return mergeLiveSignalsWithMockFallback(resultWithVolume.signals, this.fallbackProvider.getSignals(productId));
     } catch {
       return this.fallbackProvider.getSignals(productId);
     }
@@ -129,11 +136,36 @@ export class SearchTrendSignalProvider implements AsyncTrendSignalProvider {
       productId,
       productConfig?.aliases.join("|") ?? "",
       this.config.locationCode,
+      this.config.languageCode,
       this.config.interestType,
       this.config.timeRange,
       windows.dateFrom,
       windows.dateTo,
     ].join(":");
+  }
+
+  private async getVolumeSignals(
+    productId: string,
+    aliases: string[],
+    now: Date
+  ): Promise<NormalizedTrendSignal[]> {
+    try {
+      const volumeClient = this.dependencies.volumeClient ?? new DataForSeoGoogleAdsSearchVolumeClient(this.config);
+      const series = await volumeClient.getSearchVolume({
+        productId,
+        aliases,
+        locationCode: this.config.locationCode,
+        languageCode: this.config.languageCode,
+      });
+
+      return buildSearchVolumeSignalsFromSeries({
+        productId,
+        series,
+        now,
+      });
+    } catch {
+      return [];
+    }
   }
 }
 

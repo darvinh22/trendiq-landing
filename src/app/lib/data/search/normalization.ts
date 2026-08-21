@@ -1,4 +1,4 @@
-import { clamp, normalizeInverseLinear, normalizeLinear, normalizeRatio, roundTo } from "../../scoring/normalization";
+import { clamp, normalizeInverseLinear, normalizeLinear, normalizeLogScale, normalizeRatio, roundTo } from "../../scoring/normalization";
 import {
   adjustGrowthScoreForSearchBaseline,
   calculateBaselineReadiness,
@@ -7,6 +7,8 @@ import {
 import type { SearchInterestPoint, SearchInterestWindow } from "./types";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const AVERAGE_MONTH_DAYS = 30.4375;
+const SEARCH_VOLUME_ESTIMATE_DAYS = 7;
 
 export function formatSearchDate(date: Date): string {
   return date.toISOString().slice(0, 10);
@@ -173,6 +175,18 @@ export function normalizeSearchInterest(value: number): number {
   // DataForSEO Trends values are already relative popularity scores where 100
   // is peak interest in the requested comparison window.
   return roundTo(clamp(value), 2);
+}
+
+export function monthlyToSevenDaySearchVolumeFactor(): number {
+  return SEARCH_VOLUME_ESTIMATE_DAYS / AVERAGE_MONTH_DAYS;
+}
+
+export function estimateSevenDaySearchVolume(monthlySearchVolume: number): number {
+  return roundTo(Math.max(0, monthlySearchVolume) * monthlyToSevenDaySearchVolumeFactor(), 0);
+}
+
+export function normalizeSearchVolume7d(value: number): number {
+  return roundTo(normalizeLogScale(value, 100, 250000), 2);
 }
 
 export function normalizeSearchGrowth(value: number): number {

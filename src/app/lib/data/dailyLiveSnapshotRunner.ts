@@ -14,7 +14,7 @@ import type {
   TrendSignalProvider,
 } from "./types";
 
-const LIVE_SEARCH_PROVIDER_ID = "dataforseo_trends";
+const LIVE_SEARCH_PROVIDER_IDS = new Set(["dataforseo_trends", "dataforseo_google_ads"]);
 
 export type DailyLiveSnapshotStatus =
   | "created"
@@ -116,7 +116,7 @@ function summarizeSnapshot(input: {
     scoreVersion,
   });
   const liveSignalCount = input.snapshot?.rawSignals.filter((signal) =>
-    signal.metadata?.provider === LIVE_SEARCH_PROVIDER_ID
+    LIVE_SEARCH_PROVIDER_IDS.has(String(signal.metadata?.provider))
   ).length ?? 0;
   const totalSignalCount = input.snapshot?.rawSignals.length ?? 0;
 
@@ -203,7 +203,7 @@ export async function runDailyLiveSnapshot(
     sourceMode: "live",
   });
   const liveSignalCount = snapshot.rawSignals.filter((signal) =>
-    signal.metadata?.provider === LIVE_SEARCH_PROVIDER_ID
+    LIVE_SEARCH_PROVIDER_IDS.has(String(signal.metadata?.provider))
   ).length;
 
   if (liveSignalCount === 0) {

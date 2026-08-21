@@ -7,16 +7,20 @@ import {
   calculateSearchBaselineReadiness,
   calculateSearchConfidence,
   calculateTrailingDailyGrowthStreak,
+  estimateSevenDaySearchVolume,
   hasLowBaseSearchGrowth,
   normalizeConsecutiveGrowthDays,
   normalizeSearchAcceleration,
   normalizeSearchGrowth,
   normalizeSearchGrowthWithBaselineReadiness,
   normalizeSearchInterest,
+  normalizeSearchVolume7d,
+  monthlyToSevenDaySearchVolumeFactor,
 } from "./normalization";
-import type { SearchInterestSeries, SearchSignalBuildResult, SearchSignalSummary } from "./types";
+import type { SearchInterestSeries, SearchSignalBuildResult, SearchSignalSummary, SearchVolumeSeries } from "./types";
 
 const MIN_30D_WINDOW_POINTS = 21;
+const SEARCH_VOLUME_CONFIDENCE = 88;
 
 function calculateFreshnessHours(series: SearchInterestSeries, now: Date): number {
   const fetchedAtMs = Date.parse(series.fetchedAt);
@@ -305,4 +309,94 @@ export function buildSearchSignalsFromSeries(input: {
   }
 
   return { signals, summary };
+}
+
+export function buildSearchVolumeSignalsFromSeries(input: {
+  productId: string;
+  series: SearchVolumeSeries;
+  now: Date;
+}): NormalizedTrendSignal[] {
+  const estimated7d = estimateSevenDaySearchVolume(input.series.monthlySearchVolume);
+  const matchedKeywords = input.series.observations.map((observation) => observation.keyword);
+  const timestamp = input.now.toISOString();
+
+  const monthlyObservation: NormalizedTrendSignal = {
+    source: "searchWeb",
+    signalType: "searchMomentum",
+    productId: input.productId,
+    sourceProvenance: {
+      mode: "live",
+      provider: "dataforseo_google_ads",
+      providerLabel: "DataForSEO Google Ads Search Volume API",
+      providerMetric: "monthlySearchVolume",
+      approvalStatus: "not-required",
+      liveApiRequestMade: true,
+    },
+    value: input.series.monthlySearchVolume,
+    normalizedValue: normalizeSearchVolume7d(input.series.monthlySearchVolume),
+    sampleSize: input.series.monthlySearchVolume,
+    timestamp,
+    confidence: SEARCH_VOLUME_CONFIDENCE,
+    metadata: {
+      provider: "dataforseo_google_ads",
+      providerMetric: "monthlySearchVolume",
+      sourceMetric: "search_volume",
+      sourceEndpoint: input.series.endpoint,
+      sourceTimestamp: input.series.fetchedAt,
+      sourceTimeGranularity: "monthly",
+      monthlySearchVolume: input.series.monthlySearchVolume,
+      aliasesUsed: input.series.aliases.join(", "),
+      queriesMatched: matchedKeywords.length,
+      matchedKeywords: matchedKeywords.join(", "),
+      locationCode: input.series.locationCode,
+      languageCode: input.series.languageCode,
+      volumeAggregationMethod: "sum_alias_monthly_search_volume",
+      sourceCost: input.series.cost,
+      confidence: SEARCH_VOLUME_CONFIDENCE,
+    },
+  };
+
+  const derivedWeeklyEstimate: NormalizedTrendSignal = {
+    source: "searchWeb",
+    signalType: "searchMomentum",
+    productId: input.productId,
+    sourceProvenance: {
+      mode: "derived-live",
+      provider: "dataforseo_google_ads",
+      providerLabel: "DataForSEO Google Ads Search Volume API",
+      providerMetric: "estimated7dSearchVolumeFromMonthlySearchVolume",
+      approvalStatus: "not-required",
+      liveApiRequestMade: true,
+      notes: "Derived from monthly search_volume using monthlySearchVolume * (7 / 30.4375).",
+    },
+    value: estimated7d,
+    normalizedValue: normalizeSearchVolume7d(estimated7d),
+    sampleSize: input.series.monthlySearchVolume,
+    timestamp,
+    confidence: SEARCH_VOLUME_CONFIDENCE,
+    metadata: {
+      provider: "dataforseo_google_ads",
+      providerMetric: "estimated7dSearchVolumeFromMonthlySearchVolume",
+      sourceMetric: "search_volume",
+      sourceEndpoint: input.series.endpoint,
+      sourceTimestamp: input.series.fetchedAt,
+      sourceTimeGranularity: "monthly",
+      providerMonthlySearchVolume: input.series.monthlySearchVolume,
+      monthlyTo7dFormula: "monthlySearchVolume * (7 / 30.4375)",
+      monthlyTo7dFactor: monthlyToSevenDaySearchVolumeFactor(),
+      derived7dSearchVolume: estimated7d,
+      aliasesUsed: input.series.aliases.join(", "),
+      queriesMatched: matchedKeywords.length,
+      matchedKeywords: matchedKeywords.join(", "),
+      locationCode: input.series.locationCode,
+      languageCode: input.series.languageCode,
+      volumeAggregationMethod: "sum_alias_monthly_search_volume",
+      sourceCost: input.series.cost,
+      confidence: SEARCH_VOLUME_CONFIDENCE,
+      engineField: "searchVolume7d",
+      engineValue: estimated7d,
+    },
+  };
+
+  return [monthlyObservation, derivedWeeklyEstimate];
 }

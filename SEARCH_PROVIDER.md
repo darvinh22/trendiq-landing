@@ -1,20 +1,23 @@
 # TrendIQ Search Provider
 
-TrendIQ's first Search/Web live-data adapter uses **DataForSEO Trends API** behind a generic `searchWeb` provider abstraction.
+TrendIQ's Search/Web live-data adapter uses **DataForSEO Trends API** for relative interest and **DataForSEO Google Ads Search Volume API** for absolute keyword volume behind a generic `searchWeb` provider abstraction.
 
 The provider is mock-first. It does not make live calls unless `TRENDIQ_SEARCH_MODE=live` and valid DataForSEO credentials are available in the server/runtime environment.
 
 ## Provider Selected
 
-Initial vendor: DataForSEO Trends API.
+Initial vendor: DataForSEO.
 
-Endpoint used by the adapter:
+Endpoints used by the adapter:
 
 ```text
 /v3/keywords_data/dataforseo_trends/explore/live
+/v3/keywords_data/google_ads/search_volume/live
 ```
 
-This is treated in TrendIQ as **Search Interest** / **Search Momentum**, not as official Google Trends data. The adapter intentionally does not use DataForSEO's separate `google_trends` endpoint as the default provider.
+The Trends endpoint is treated in TrendIQ as **Search Interest** / **Search Momentum**, not as official Google Trends data. The adapter intentionally does not use DataForSEO's separate `google_trends` endpoint as the default provider.
+
+The Google Ads Search Volume endpoint is treated as an absolute monthly keyword-volume observation. TrendIQ converts that monthly observation into an explicit derived 7-day estimate for the existing `searchVolume7d` score input.
 
 The provider abstraction is generic so a future official Google Trends API adapter can replace DataForSEO without changing the Score Engine.
 
@@ -39,6 +42,7 @@ DATAFORSEO_API_BASE_URL=https://api.dataforseo.com
 TRENDIQ_SEARCH_CACHE_TTL_MS=900000
 TRENDIQ_SEARCH_MIN_SAMPLE_SIZE=2
 TRENDIQ_SEARCH_LOCATION_CODE=2840
+TRENDIQ_SEARCH_LANGUAGE_CODE=en
 ```
 
 Do not expose these values through `VITE_` environment variables. DataForSEO credentials must stay server-side.
@@ -65,8 +69,10 @@ Aliases live in `src/app/lib/data/search/config.ts`.
 Live-capable signals:
 
 - `searchMomentum.searchGrowthPercent`
+- `searchMomentum.searchVolume7d` as a derived 7-day estimate from live monthly search volume
 - `growthVelocity.trendChangePercent`
 - `growthVelocity.accelerationPercent`
+- `growthVelocity.consecutiveGrowthDays`
 
 Context-only signals:
 
@@ -79,7 +85,6 @@ Context-only signals:
 
 Still mocked:
 
-- absolute `searchMomentum.searchVolume7d`
 - `searchMomentum.queryShareOfCategoryPercent`
 - sentiment
 - purchase intent
@@ -104,8 +109,15 @@ The provider does not fabricate historical snapshots. If a future runtime does n
 
 DataForSEO Trends values are relative Search Interest values from 0 to 100. TrendIQ keeps them as provider-level normalized values.
 
+DataForSEO Google Ads Search Volume returns monthly-style absolute keyword volume. TrendIQ stores the provider monthly observation as `live` context and derives `searchVolume7d` as:
+
+```text
+monthlySearchVolume * (7 / 30.4375)
+```
+
 Score-affecting fields use the existing score-engine raw input fields:
 
+- monthly Search Volume maps to `searchMomentum.searchVolume7d` only after the explicit 7-day conversion above
 - 7-day Search Interest change maps to `searchGrowthPercent`
 - 7-day Search Interest change maps to `growthVelocity.trendChangePercent`
 - 7-day minus 30-day growth maps to `growthVelocity.accelerationPercent`
@@ -120,6 +132,7 @@ The MVP uses an in-memory cache keyed by:
 - product
 - aliases
 - location
+- language
 - interest type
 - date window
 
@@ -162,10 +175,11 @@ Live mode also requires `DATAFORSEO_LOGIN` and `DATAFORSEO_PASSWORD`.
 ## Limitations
 
 - DataForSEO Trends is a proprietary Search Interest metric, not official Google Trends.
+- Google Ads Search Volume is monthly-style keyword volume, not a direct 7-day observation.
 - It should not be used for sentiment, reviews, purchase intent, or social platform sentiment.
 - Live credentials must be used only from a server-side context.
 - Alias ambiguity can still pull broad smart-glasses interest that is not purely Ray-Ban Meta.
-- Cost scales with product count, alias count, and refresh cadence, so batching and caching matter.
+- Cost scales with product count, alias count, endpoint count, and refresh cadence, so batching and caching matter.
 
 ## Replacing The Provider Later
 

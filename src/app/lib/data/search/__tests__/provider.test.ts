@@ -5,7 +5,13 @@ import { RAY_BAN_META_PRODUCT_ID } from "../../mockProviderSignals";
 import { readSearchProviderConfig, SEARCH_RAY_BAN_ALIASES } from "../config";
 import { mockSearchProvider } from "../mockSearchProvider";
 import { SearchTrendSignalProvider } from "../provider";
-import type { SearchInterestClient, SearchInterestPoint, SearchInterestSeries } from "../types";
+import type {
+  SearchInterestClient,
+  SearchInterestPoint,
+  SearchInterestSeries,
+  SearchVolumeClient,
+  SearchVolumeSeries,
+} from "../types";
 
 const now = new Date("2026-08-12T00:00:00.000Z");
 
@@ -91,6 +97,61 @@ class FixtureSearchClient implements SearchInterestClient {
   }
 }
 
+function fixtureVolumeSeries(monthlySearchVolume = 30000): SearchVolumeSeries {
+  return {
+    provider: "dataforseo",
+    productId: RAY_BAN_META_PRODUCT_ID,
+    aliases: [...SEARCH_RAY_BAN_ALIASES],
+    locationCode: 2840,
+    languageCode: "en",
+    fetchedAt: now.toISOString(),
+    cost: 0.075,
+    endpoint: "/v3/keywords_data/google_ads/search_volume/live",
+    monthlySearchVolume,
+    observations: [
+      {
+        keyword: "Ray-Ban Meta",
+        locationCode: 2840,
+        languageCode: "en",
+        monthlySearchVolume,
+        monthlySearches: [
+          { year: 2026, month: 7, searchVolume: monthlySearchVolume },
+        ],
+      },
+    ],
+  };
+}
+
+class FixtureVolumeClient implements SearchVolumeClient {
+  readonly calls: Array<{ aliases: string[]; locationCode: number; languageCode: string }> = [];
+
+  constructor(
+    private readonly series?: SearchVolumeSeries,
+    private readonly error?: Error
+  ) {}
+
+  async getSearchVolume(input: {
+    aliases: string[];
+    locationCode: number;
+    languageCode: string;
+  }): Promise<SearchVolumeSeries> {
+    this.calls.push({
+      aliases: input.aliases,
+      locationCode: input.locationCode,
+      languageCode: input.languageCode,
+    });
+
+    if (this.error) throw this.error;
+    if (!this.series) throw new Error("volume unavailable");
+
+    return this.series;
+  }
+}
+
+function unavailableVolumeClient(): FixtureVolumeClient {
+  return new FixtureVolumeClient(undefined, new Error("volume unavailable"));
+}
+
 function liveConfig() {
   return readSearchProviderConfig({}, {
     mode: "live",
@@ -103,23 +164,27 @@ function liveConfig() {
 describe("SearchTrendSignalProvider", () => {
   it("falls back to mock when credentials are missing", async () => {
     const client = new FixtureSearchClient(successfulDiagnosticSeries());
+    const volumeClient = new FixtureVolumeClient(fixtureVolumeSeries());
     const provider = new SearchTrendSignalProvider(readSearchProviderConfig({}, {
       mode: "live",
       now: () => now,
     }), {
       client,
+      volumeClient,
     });
 
     expect(await provider.getSignalsAsync(RAY_BAN_META_PRODUCT_ID)).toEqual(
       mockSearchProvider.getSignals(RAY_BAN_META_PRODUCT_ID)
     );
     expect(client.calls).toEqual([]);
+    expect(volumeClient.calls).toEqual([]);
   });
 
   it("uses aliases and returns live search-interest fields with mock fallback fields", async () => {
     const client = new FixtureSearchClient(successfulDiagnosticSeries());
     const provider = new SearchTrendSignalProvider(liveConfig(), {
       client,
+      volumeClient: unavailableVolumeClient(),
     });
     const signals = await provider.getSignalsAsync(RAY_BAN_META_PRODUCT_ID);
     const byEngineField = new Map(signals.map((signal) => [signal.metadata?.engineField, signal]));
@@ -136,39 +201,72 @@ describe("SearchTrendSignalProvider", () => {
     expect(provider.getDebugSummary(RAY_BAN_META_PRODUCT_ID)?.current7dInterest).toBe(7.29);
   });
 
-  it("uses the cache for repeated async live calls", async () => {
+  it("uses live monthly search volume as an explicit derived-live 7-day estimate", async () => {
     const client = new FixtureSearchClient(successfulDiagnosticSeries());
+    const volumeClient = new FixtureVolumeClient(fixtureVolumeSeries(30000));
     const provider = new SearchTrendSignalProvider(liveConfig(), {
       client,
+      volumeClient,
+    });
+    const signals = await provider.getSignalsAsync(RAY_BAN_META_PRODUCT_ID);
+    const byEngineField = new Map(signals.map((signal) => [signal.metadata?.engineField, signal]));
+    const searchVolume = byEngineField.get("searchVolume7d");
+
+    expect(volumeClient.calls[0]).toEqual({
+      aliases: [...SEARCH_RAY_BAN_ALIASES],
+      locationCode: 2840,
+      languageCode: "en",
+    });
+    expect(searchVolume?.sourceProvenance.mode).toBe("derived-live");
+    expect(searchVolume?.metadata?.provider).toBe("dataforseo_google_ads");
+    expect(searchVolume?.metadata?.providerMonthlySearchVolume).toBe(30000);
+    expect(searchVolume?.metadata?.monthlyTo7dFormula).toBe("monthlySearchVolume * (7 / 30.4375)");
+    expect(searchVolume?.value).toBe(6899);
+    expect(byEngineField.get("queryShareOfCategoryPercent")?.sourceProvenance.mode).toBe("fallback");
+    expect(byEngineField.get("searchGrowthPercent")?.value).toBe(-82.8);
+    expect(byEngineField.get("searchGrowthPercent")?.sourceProvenance.mode).toBe("derived-live");
+  });
+
+  it("uses the cache for repeated async live calls", async () => {
+    const client = new FixtureSearchClient(successfulDiagnosticSeries());
+    const volumeClient = new FixtureVolumeClient(fixtureVolumeSeries());
+    const provider = new SearchTrendSignalProvider(liveConfig(), {
+      client,
+      volumeClient,
     });
 
     await provider.getSignalsAsync(RAY_BAN_META_PRODUCT_ID);
     await provider.getSignalsAsync(RAY_BAN_META_PRODUCT_ID);
 
     expect(client.calls).toHaveLength(1);
+    expect(volumeClient.calls).toHaveLength(1);
   });
 
   it("falls back to mock when returned data is insufficient", async () => {
     const client = new FixtureSearchClient(fixtureSeries([
       point("2026-08-06", "2026-08-12", [70, 0, 0, 0]),
     ]));
+    const volumeClient = new FixtureVolumeClient(fixtureVolumeSeries());
     const provider = new SearchTrendSignalProvider(readSearchProviderConfig({}, {
       ...liveConfig(),
       minSampleSize: 8,
     }), {
       client,
+      volumeClient,
     });
 
     expect(await provider.getSignalsAsync(RAY_BAN_META_PRODUCT_ID)).toEqual(
       mockSearchProvider.getSignals(RAY_BAN_META_PRODUCT_ID)
     );
     expect(provider.getDebugSummary(RAY_BAN_META_PRODUCT_ID)?.hasSufficientData).toBe(false);
+    expect(volumeClient.calls).toEqual([]);
   });
 
   it("integrates live Search Interest with the aggregator and Score Engine without replacing other providers", async () => {
     const client = new FixtureSearchClient(successfulDiagnosticSeries());
     const searchProvider = new SearchTrendSignalProvider(liveConfig(), {
       client,
+      volumeClient: unavailableVolumeClient(),
     });
     const snapshot = await buildProductTrendSnapshotAsync(
       RAY_BAN_META_PRODUCT_ID,
@@ -195,6 +293,36 @@ describe("SearchTrendSignalProvider", () => {
     expect(growthComponent?.liveCoveragePercent).toBe(100);
   });
 
+  it("integrates live Search Volume without changing DataForSEO Trends growth or category-share fallback", async () => {
+    const client = new FixtureSearchClient(successfulDiagnosticSeries());
+    const searchProvider = new SearchTrendSignalProvider(liveConfig(), {
+      client,
+      volumeClient: new FixtureVolumeClient(fixtureVolumeSeries(30000)),
+    });
+    const snapshot = await buildProductTrendSnapshotAsync(
+      RAY_BAN_META_PRODUCT_ID,
+      [searchProvider, redditProvider, reviewsProvider, socialProvider, merchantProvider],
+      { timestamp: now.toISOString() }
+    );
+    const searchComponent = snapshot.liveDataAudit?.componentSummaries.find((component) =>
+      component.component === "searchMomentum"
+    );
+
+    expect(snapshot.aggregatedSignals.searchMomentum.searchVolume7d).toBe(6899);
+    expect(snapshot.aggregatedSignals.searchMomentum.searchGrowthPercent).toBe(-82.8);
+    expect(snapshot.aggregatedSignals.searchMomentum.queryShareOfCategoryPercent).toBe(18);
+    expect(snapshot.trendIQScore.scoreVersion).toBe("v1.1");
+    expect(searchComponent?.fields.find((field) =>
+      field.engineField === "searchVolume7d"
+    )?.provenance).toBe("derived-live");
+    expect(searchComponent?.fields.find((field) =>
+      field.engineField === "searchGrowthPercent"
+    )?.provenance).toBe("derived-live");
+    expect(searchComponent?.fields.find((field) =>
+      field.engineField === "queryShareOfCategoryPercent"
+    )?.provenance).toBe("fallback");
+  });
+
   it("keeps mock Growth Velocity fields when live Search Interest is insufficient", async () => {
     const client = new FixtureSearchClient(fixtureSeries([
       point("2026-08-06", "2026-08-12", [70, 0, 0, 0]),
@@ -204,6 +332,7 @@ describe("SearchTrendSignalProvider", () => {
       minSampleSize: 8,
     }), {
       client,
+      volumeClient: new FixtureVolumeClient(fixtureVolumeSeries()),
     });
     const snapshot = await buildProductTrendSnapshotAsync(
       RAY_BAN_META_PRODUCT_ID,
