@@ -23,6 +23,7 @@ interface FetchResponseLike {
 interface DataForSeoGoogleShoppingRating {
   value?: number | null;
   rating_max?: number | null;
+  rating_count?: number | null;
   votes_count?: number | null;
 }
 
@@ -189,6 +190,83 @@ function stringOrUndefined(value: unknown): string | undefined {
   return typeof value === "string" && value.length ? value : undefined;
 }
 
+function selectRatingEvidence(item: DataForSeoGoogleShoppingProductItem): Pick<
+  GoogleShoppingProductCandidate,
+  | "writtenReviewCount"
+  | "ratingVoteCount"
+  | "ratingCount"
+  | "ratingEvidenceCount"
+  | "ratingEvidenceSourceField"
+  | "ratingEvidenceComposition"
+> {
+  const writtenReviewCount = finiteNumber(item.reviews_count);
+  const ratingVoteCount = finiteNumber(item.product_rating?.votes_count);
+  const ratingCount = finiteNumber(item.product_rating?.rating_count);
+
+  if (typeof ratingCount === "number") {
+    if (typeof writtenReviewCount === "number" && ratingCount < writtenReviewCount) {
+      return {
+        writtenReviewCount,
+        ratingVoteCount,
+        ratingCount,
+        ratingEvidenceSourceField: "inconsistent_provider_counts",
+        ratingEvidenceComposition: "inconsistent_rating_count_lt_reviews_count",
+      };
+    }
+
+    return {
+      writtenReviewCount,
+      ratingVoteCount,
+      ratingCount,
+      ratingEvidenceCount: ratingCount,
+      ratingEvidenceSourceField: "product_rating.rating_count",
+      ratingEvidenceComposition: typeof writtenReviewCount === "number"
+        ? "total_rating_count_with_written_reviews"
+        : "total_rating_count",
+    };
+  }
+
+  if (typeof ratingVoteCount === "number") {
+    if (typeof writtenReviewCount === "number" && ratingVoteCount < writtenReviewCount) {
+      return {
+        writtenReviewCount,
+        ratingVoteCount,
+        ratingCount,
+        ratingEvidenceSourceField: "inconsistent_provider_counts",
+        ratingEvidenceComposition: "inconsistent_votes_count_lt_reviews_count",
+      };
+    }
+
+    return {
+      writtenReviewCount,
+      ratingVoteCount,
+      ratingCount,
+      ratingEvidenceCount: ratingVoteCount,
+      ratingEvidenceSourceField: "product_rating.votes_count",
+      ratingEvidenceComposition: typeof writtenReviewCount === "number"
+        ? "rating_votes_with_written_reviews"
+        : "rating_votes_only",
+    };
+  }
+
+  if (typeof writtenReviewCount === "number") {
+    return {
+      writtenReviewCount,
+      ratingVoteCount,
+      ratingCount,
+      ratingEvidenceCount: writtenReviewCount,
+      ratingEvidenceSourceField: "reviews_count",
+      ratingEvidenceComposition: "written_reviews_only",
+    };
+  }
+
+  return {
+    writtenReviewCount,
+    ratingVoteCount,
+    ratingCount,
+  };
+}
+
 function toIsoTimestamp(value: string | undefined, fallback: string): string {
   if (!value) return fallback;
 
@@ -222,9 +300,7 @@ function findSuccessfulTask<TResult>(
 function mapProductCandidate(item: DataForSeoGoogleShoppingProductItem): GoogleShoppingProductCandidate | undefined {
   const title = stringOrUndefined(item.title);
   if (!title) return undefined;
-
-  const providerReviewCount =
-    finiteNumber(item.reviews_count) ?? finiteNumber(item.product_rating?.votes_count);
+  const ratingEvidence = selectRatingEvidence(item);
 
   return {
     title,
@@ -236,7 +312,7 @@ function mapProductCandidate(item: DataForSeoGoogleShoppingProductItem): GoogleS
     },
     averageRating: finiteNumber(item.product_rating?.value),
     ratingMax: finiteNumber(item.product_rating?.rating_max),
-    providerReviewCount,
+    ...ratingEvidence,
     rankGroup: finiteNumber(item.rank_group),
     rankAbsolute: finiteNumber(item.rank_absolute),
     isBestMatch: item.is_best_match,
@@ -298,7 +374,12 @@ export function mapDataForSeoGoogleShoppingProductsResponse(input: {
     identifiers: selected.candidate.identifiers,
     averageRating: selected.candidate.averageRating ?? 0,
     ratingMax: selected.candidate.ratingMax,
-    providerReviewCount: selected.candidate.providerReviewCount,
+    writtenReviewCount: selected.candidate.writtenReviewCount,
+    ratingVoteCount: selected.candidate.ratingVoteCount,
+    ratingCount: selected.candidate.ratingCount,
+    ratingEvidenceCount: selected.candidate.ratingEvidenceCount,
+    ratingEvidenceSourceField: selected.candidate.ratingEvidenceSourceField,
+    ratingEvidenceComposition: selected.candidate.ratingEvidenceComposition,
     matchConfidence: selected.match.confidence,
     matchScore: selected.match.score,
     matchReasons: selected.match.reasons,

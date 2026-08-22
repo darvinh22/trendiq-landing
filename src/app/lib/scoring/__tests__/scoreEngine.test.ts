@@ -22,7 +22,7 @@ const completeHighSignal: TrendIQSignalInputs = {
   },
   reviewQuality: {
     averageRating: 4.8,
-    reviewCount: 20000,
+    ratingEvidenceCount: 20000,
     verifiedPurchasePercent: 95,
     recentAverageRating: 4.8,
   },

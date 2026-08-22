@@ -13,7 +13,7 @@ import {
   mapDataForSeoGoogleShoppingProductsResponse,
 } from "./reviews/client";
 import { readReviewProviderConfig } from "./reviews/config";
-import { buildReviewAverageRatingSignalFromObservation } from "./reviews/signalBuilder";
+import { buildReviewQualitySignalsFromObservation } from "./reviews/signalBuilder";
 import {
   DATAFORSEO_GOOGLE_ADS_SEARCH_VOLUME_PATH,
   mapDataForSeoGoogleAdsSearchVolumeResponse,
@@ -223,7 +223,7 @@ export function buildValidatedRayBanMetaLiveSnapshot(): ProductTrendSnapshot {
     endpoint: DATAFORSEO_GOOGLE_SHOPPING_PRODUCTS_TASK_GET_ADVANCED_PATH_PREFIX,
     minimumMatchConfidence: reviewConfig.minimumMatchConfidence,
   });
-  const liveReviewSignals = buildReviewAverageRatingSignalFromObservation({
+  const liveReviewSignals = buildReviewQualitySignalsFromObservation({
     productId: RAY_BAN_META_PRODUCT_ID,
     observation: reviewObservation,
   }).signals;

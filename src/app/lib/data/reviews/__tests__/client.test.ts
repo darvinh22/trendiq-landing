@@ -73,7 +73,11 @@ describe("DataForSEO Google Shopping review mapping", () => {
 
     expect(observation.averageRating).toBe(4.4);
     expect(observation.ratingMax).toBe(5);
-    expect(observation.providerReviewCount).toBe(1700);
+    expect(observation.ratingEvidenceCount).toBe(1700);
+    expect(observation.ratingVoteCount).toBe(1700);
+    expect(observation.writtenReviewCount).toBeUndefined();
+    expect(observation.ratingEvidenceSourceField).toBe("product_rating.votes_count");
+    expect(observation.ratingEvidenceComposition).toBe("rating_votes_only");
     expect(observation.identifiers).toEqual({
       productId: "11716803554991446550",
       dataDocid: "4690297997048968068",
@@ -83,6 +87,86 @@ describe("DataForSEO Google Shopping review mapping", () => {
     expect(observation.matchReasons).toContain("accepted_seller_match");
     expect(observation.matchReasons).toContain("persisted_provider_identifier_match");
     expect(observation.fetchedAt).toBe("2026-08-21T23:47:20.000Z");
+  });
+
+  it("maps reviews_count only into ratingEvidenceCount as written review evidence", () => {
+    const observation = mapDataForSeoGoogleShoppingProductsResponse({
+      response: productsResponse([
+        {
+          ...rayBanMetaItem,
+          reviews_count: 430,
+          product_rating: {
+            value: 4.4,
+            rating_max: 5,
+          },
+        },
+      ]),
+      productId: "ray-ban-meta",
+      identity,
+      locationCode: 2840,
+      languageCode: "en",
+      fetchedAt: now.toISOString(),
+    });
+
+    expect(observation.writtenReviewCount).toBe(430);
+    expect(observation.ratingVoteCount).toBeUndefined();
+    expect(observation.ratingEvidenceCount).toBe(430);
+    expect(observation.ratingEvidenceSourceField).toBe("reviews_count");
+    expect(observation.ratingEvidenceComposition).toBe("written_reviews_only");
+  });
+
+  it("uses votes_count when both counts exist and votes_count covers reviews_count", () => {
+    const observation = mapDataForSeoGoogleShoppingProductsResponse({
+      response: productsResponse([
+        {
+          ...rayBanMetaItem,
+          reviews_count: 800,
+          product_rating: {
+            value: 4.4,
+            rating_max: 5,
+            votes_count: 1200,
+          },
+        },
+      ]),
+      productId: "ray-ban-meta",
+      identity,
+      locationCode: 2840,
+      languageCode: "en",
+      fetchedAt: now.toISOString(),
+    });
+
+    expect(observation.writtenReviewCount).toBe(800);
+    expect(observation.ratingVoteCount).toBe(1200);
+    expect(observation.ratingEvidenceCount).toBe(1200);
+    expect(observation.ratingEvidenceSourceField).toBe("product_rating.votes_count");
+    expect(observation.ratingEvidenceComposition).toBe("rating_votes_with_written_reviews");
+  });
+
+  it("marks inconsistent votes_count below reviews_count without choosing a rating evidence value", () => {
+    const observation = mapDataForSeoGoogleShoppingProductsResponse({
+      response: productsResponse([
+        {
+          ...rayBanMetaItem,
+          reviews_count: 1200,
+          product_rating: {
+            value: 4.4,
+            rating_max: 5,
+            votes_count: 800,
+          },
+        },
+      ]),
+      productId: "ray-ban-meta",
+      identity,
+      locationCode: 2840,
+      languageCode: "en",
+      fetchedAt: now.toISOString(),
+    });
+
+    expect(observation.writtenReviewCount).toBe(1200);
+    expect(observation.ratingVoteCount).toBe(800);
+    expect(observation.ratingEvidenceCount).toBeUndefined();
+    expect(observation.ratingEvidenceSourceField).toBe("inconsistent_provider_counts");
+    expect(observation.ratingEvidenceComposition).toBe("inconsistent_votes_count_lt_reviews_count");
   });
 
   it("rejects unrelated Ray-Ban products without Meta identity", () => {
@@ -109,7 +193,7 @@ describe("DataForSEO Google Shopping review mapping", () => {
       seller: "Example Store",
       identifiers: {},
       averageRating: 4.5,
-      providerReviewCount: 50,
+      ratingEvidenceCount: 50,
     }, identity);
 
     expect(result.confidence).toBe("rejected");

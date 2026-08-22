@@ -86,9 +86,9 @@ export function calculateScoreComponents(input: TrendIQSignalInputs): TrendIQSco
     // effectively best-in-class after review-volume checks.
     { score: normalizeLinear(input.reviewQuality.averageRating, 3.2, 4.8), weight: 0.45 },
 
-    // Review count is log-scaled from 20 to 20,000 so credibility rises quickly
-    // at first, then tapers once the product is widely reviewed.
-    { score: normalizeLogScale(input.reviewQuality.reviewCount, 20, 20000), weight: 0.25 },
+    // Rating evidence count is log-scaled from 20 to 20,000 so credibility
+    // rises quickly at first, then tapers once the rating is well-supported.
+    { score: normalizeLogScale(input.reviewQuality.ratingEvidenceCount, 20, 20000), weight: 0.25 },
 
     // Verified-purchase share below 30% is weak; 95%+ is capped as excellent.
     { score: normalizeLinear(input.reviewQuality.verifiedPurchasePercent, 30, 95), weight: 0.15 },

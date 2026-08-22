@@ -46,7 +46,12 @@ export interface GoogleShoppingProductCandidate {
   identifiers: GoogleShoppingProductIdentifier;
   averageRating?: number;
   ratingMax?: number;
-  providerReviewCount?: number;
+  writtenReviewCount?: number;
+  ratingVoteCount?: number;
+  ratingCount?: number;
+  ratingEvidenceCount?: number;
+  ratingEvidenceSourceField?: string;
+  ratingEvidenceComposition?: string;
   rankGroup?: number;
   rankAbsolute?: number;
   isBestMatch?: boolean;
@@ -72,7 +77,12 @@ export interface GoogleShoppingReviewObservation {
   identifiers: GoogleShoppingProductIdentifier;
   averageRating: number;
   ratingMax?: number;
-  providerReviewCount?: number;
+  writtenReviewCount?: number;
+  ratingVoteCount?: number;
+  ratingCount?: number;
+  ratingEvidenceCount?: number;
+  ratingEvidenceSourceField?: string;
+  ratingEvidenceComposition?: string;
   matchConfidence: Exclude<ProductMatchConfidence, "rejected">;
   matchScore: number;
   matchReasons: string[];

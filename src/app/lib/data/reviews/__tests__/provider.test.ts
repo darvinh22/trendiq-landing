@@ -31,7 +31,10 @@ function observation(overrides: Partial<GoogleShoppingReviewObservation> = {}): 
     },
     averageRating: 4.4,
     ratingMax: 5,
-    providerReviewCount: 1700,
+    ratingVoteCount: 1700,
+    ratingEvidenceCount: 1700,
+    ratingEvidenceSourceField: "product_rating.votes_count",
+    ratingEvidenceComposition: "rating_votes_only",
     matchConfidence: "high",
     matchScore: 100,
     matchReasons: ["accepted_seller_match", "persisted_provider_identifier_match"],
@@ -80,7 +83,7 @@ function liveConfig(overrides: Parameters<typeof readReviewProviderConfig>[1] = 
 }
 
 describe("ReviewQualitySignalProvider", () => {
-  it("uses high-confidence Google Shopping averageRating and leaves provider reviewCount as metadata only", async () => {
+  it("uses high-confidence Google Shopping averageRating and ratingEvidenceCount", async () => {
     const client = new FixtureReviewClient(observation());
     const provider = new ReviewQualitySignalProvider(liveConfig(), { client });
     const signals = await provider.getSignalsAsync(RAY_BAN_META_PRODUCT_ID);
@@ -96,12 +99,35 @@ describe("ReviewQualitySignalProvider", () => {
     expect(byEngineField.get("averageRating")?.value).toBe(4.4);
     expect(byEngineField.get("averageRating")?.sourceProvenance.mode).toBe("live");
     expect(byEngineField.get("averageRating")?.metadata?.provider).toBe("dataforseo_google_shopping");
-    expect(byEngineField.get("averageRating")?.metadata?.providerReviewCount).toBe(1700);
-    expect(byEngineField.get("averageRating")?.metadata?.providerReviewCountRole).toBe("metadata_only_phase_3b");
-    expect(byEngineField.get("reviewCount")?.sourceProvenance.mode).toBe("fallback");
-    expect(byEngineField.get("reviewCount")?.metadata?.engineValue).toBe(2900);
+    expect(byEngineField.get("averageRating")?.metadata?.ratingEvidenceCount).toBe(1700);
+    expect(byEngineField.get("ratingEvidenceCount")?.value).toBe(1700);
+    expect(byEngineField.get("ratingEvidenceCount")?.sourceProvenance.mode).toBe("live");
+    expect(byEngineField.get("ratingEvidenceCount")?.metadata?.ratingVoteCount).toBe(1700);
+    expect(byEngineField.get("ratingEvidenceCount")?.metadata?.writtenReviewCount).toBeUndefined();
+    expect(byEngineField.get("ratingEvidenceCount")?.metadata?.ratingEvidenceSourceField)
+      .toBe("product_rating.votes_count");
+    expect(byEngineField.get("ratingEvidenceCount")?.metadata?.ratingEvidenceComposition).toBe("rating_votes_only");
     expect(byEngineField.get("verifiedPurchasePercent")?.sourceProvenance.mode).toBe("fallback");
     expect(byEngineField.get("recentAverageRating")?.sourceProvenance.mode).toBe("fallback");
+  });
+
+  it("falls back to mock rating evidence when provider counts are inconsistent", async () => {
+    const client = new FixtureReviewClient(observation({
+      writtenReviewCount: 1200,
+      ratingVoteCount: 800,
+      ratingEvidenceCount: undefined,
+      ratingEvidenceSourceField: "inconsistent_provider_counts",
+      ratingEvidenceComposition: "inconsistent_votes_count_lt_reviews_count",
+    }));
+    const provider = new ReviewQualitySignalProvider(liveConfig(), { client });
+    const signals = await provider.getSignalsAsync(RAY_BAN_META_PRODUCT_ID);
+    const byEngineField = new Map(signals.map((signal) => [signal.metadata?.engineField, signal]));
+
+    expect(byEngineField.get("averageRating")?.sourceProvenance.mode).toBe("live");
+    expect(byEngineField.get("averageRating")?.metadata?.ratingEvidenceSourceField)
+      .toBe("inconsistent_provider_counts");
+    expect(byEngineField.get("ratingEvidenceCount")?.sourceProvenance.mode).toBe("fallback");
+    expect(byEngineField.get("ratingEvidenceCount")?.metadata?.engineValue).toBe(2900);
   });
 
   it("falls back without a live request when review credentials are unavailable", async () => {
@@ -147,7 +173,7 @@ describe("ReviewQualitySignalProvider", () => {
     expect(client.calls).toEqual([]);
   });
 
-  it("does not change score inputs beyond averageRating when the live rating equals the mock value", async () => {
+  it("updates only averageRating and ratingEvidenceCount in Review Quality score inputs", async () => {
     const client = new FixtureReviewClient(observation());
     const provider = new ReviewQualitySignalProvider(liveConfig(), { client });
     const mockSnapshot = buildProductTrendSnapshot(
@@ -164,10 +190,20 @@ describe("ReviewQualitySignalProvider", () => {
       component.component === "reviewQuality"
     );
 
-    expect(snapshot.aggregatedSignals.reviewQuality).toEqual(mockSnapshot.aggregatedSignals.reviewQuality);
-    expect(snapshot.aggregatedSignals.reviewQuality.reviewCount).toBe(2900);
-    expect(calculateTrendIQScore(snapshot.aggregatedSignals).score).toBe(mockSnapshot.trendIQScore.score);
+    expect(snapshot.aggregatedSignals.reviewQuality.averageRating).toBe(
+      mockSnapshot.aggregatedSignals.reviewQuality.averageRating
+    );
+    expect(snapshot.aggregatedSignals.reviewQuality.ratingEvidenceCount).toBe(1700);
+    expect(snapshot.aggregatedSignals.reviewQuality.verifiedPurchasePercent).toBe(
+      mockSnapshot.aggregatedSignals.reviewQuality.verifiedPurchasePercent
+    );
+    expect(snapshot.aggregatedSignals.reviewQuality.recentAverageRating).toBe(
+      mockSnapshot.aggregatedSignals.reviewQuality.recentAverageRating
+    );
+    expect(calculateTrendIQScore(snapshot.aggregatedSignals).scoreVersion).toBe(mockSnapshot.trendIQScore.scoreVersion);
     expect(reviewComponent?.fields.find((field) => field.engineField === "averageRating")?.provenance).toBe("live");
-    expect(reviewComponent?.fields.find((field) => field.engineField === "reviewCount")?.provenance).toBe("fallback");
+    expect(reviewComponent?.fields.find((field) =>
+      field.engineField === "ratingEvidenceCount"
+    )?.provenance).toBe("live");
   });
 });

@@ -55,7 +55,7 @@ export interface SentimentSignals {
 
 export interface ReviewQualitySignals {
   averageRating: number;
-  reviewCount: number;
+  ratingEvidenceCount: number;
   verifiedPurchasePercent: number;
   recentAverageRating: number;
 }

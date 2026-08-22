@@ -57,7 +57,7 @@ const COMPONENT_FIELD_WEIGHTS: Record<TrendIQScoreComponentKey, readonly ScoreFi
   ],
   reviewQuality: [
     { engineField: "averageRating", engineFields: ["averageRating"], weight: 0.45 },
-    { engineField: "reviewCount", engineFields: ["reviewCount"], weight: 0.25 },
+    { engineField: "ratingEvidenceCount", engineFields: ["ratingEvidenceCount"], weight: 0.25 },
     { engineField: "verifiedPurchasePercent", engineFields: ["verifiedPurchasePercent"], weight: 0.15 },
     { engineField: "recentAverageRating", engineFields: ["recentAverageRating"], weight: 0.15 },
   ],

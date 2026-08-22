@@ -20,7 +20,7 @@ const baseSignals: TrendIQSignalInputs = {
   },
   reviewQuality: {
     averageRating: 4.4,
-    reviewCount: 1000,
+    ratingEvidenceCount: 1000,
     verifiedPurchasePercent: 80,
     recentAverageRating: 4.3,
   },
@@ -78,6 +78,25 @@ describe("penalties", () => {
 
   it("does not penalize balanced signals", () => {
     expect(calculateScorePenalties(baseSignals, baseComponents)).toEqual([]);
+  });
+
+  it("penalizes high ratings backed by thin rating evidence without changing magnitude", () => {
+    const penalties = calculateScorePenalties(
+      {
+        ...baseSignals,
+        reviewQuality: {
+          ...baseSignals.reviewQuality,
+          averageRating: 4.7,
+          ratingEvidenceCount: 30,
+        },
+      },
+      baseComponents
+    );
+    const thinEvidence = penalties.find((item) => item.id === "thin_rating_evidence");
+
+    expect(thinEvidence?.label).toBe("Thin rating evidence");
+    expect(thinEvidence?.reason).toBe("High rating is based on limited rating evidence.");
+    expect(thinEvidence?.points).toBe(3);
   });
 
   it("penalizes concentrated creator-driven hype", () => {

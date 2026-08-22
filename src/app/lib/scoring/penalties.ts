@@ -37,15 +37,15 @@ export function calculateScorePenalties(input: TrendIQSignalInputs, components: 
     );
   }
 
-  if (input.reviewQuality.averageRating >= 4.5 && input.reviewQuality.reviewCount < 75) {
-    // Early review sets can look artificially pristine. This fades to zero once
-    // there are 75+ reviews, which is enough for v1 mock product comparisons.
+  if (input.reviewQuality.averageRating >= 4.5 && input.reviewQuality.ratingEvidenceCount < 75) {
+    // Early rating evidence can look artificially pristine. This fades to zero
+    // once there are 75+ rating/review signals for v1 product comparisons.
     penalties.push(
       penalty(
-        "thin_review_base",
-        "Thin review base",
-        normalizeInverseLinear(input.reviewQuality.reviewCount, 0, 75) * 5 / 100,
-        "High ratings are based on a small review sample."
+        "thin_rating_evidence",
+        "Thin rating evidence",
+        normalizeInverseLinear(input.reviewQuality.ratingEvidenceCount, 0, 75) * 5 / 100,
+        "High rating is based on limited rating evidence."
       )
     );
   }

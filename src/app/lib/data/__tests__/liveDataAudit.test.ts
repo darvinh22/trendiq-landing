@@ -125,8 +125,8 @@ describe("live data audit", () => {
       field.engineField === "averageRating"
     )?.provenance).toBe("live");
     expect(reviewComponent?.fields.find((field) =>
-      field.engineField === "reviewCount"
-    )?.provenance).toBe("fallback");
+      field.engineField === "ratingEvidenceCount"
+    )?.provenance).toBe("live");
     expect(growthComponent?.provenance).toBe("derived-live");
     expect(growthComponent?.liveCoveragePercent).toBe(100);
     expect(growthComponent?.fields.find((field) =>

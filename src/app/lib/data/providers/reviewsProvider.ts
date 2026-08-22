@@ -3,7 +3,7 @@ import { DATA_LAYER_TIMESTAMP, RAY_BAN_META_PRODUCT_ID, RAY_BAN_META_SIGNAL_INPU
 import { InMemorySearchCache, type SearchCache } from "../search/cache";
 import {
   DataForSeoGoogleShoppingProductsClient,
-  buildReviewAverageRatingSignalFromObservation,
+  buildReviewQualitySignalsFromObservation,
   readReviewProviderConfig,
   shouldUseLiveReviews,
   type GoogleShoppingReviewsClient,
@@ -44,7 +44,7 @@ export const mockReviewsProvider: TrendSignalProvider = {
         // Ratings below 3.2 are treated as weak for consumer products; 4.8+
         // is capped because review volume and freshness decide the rest.
         normalizedValue: normalize(normalizeLinear(reviews.averageRating, 3.2, 4.8)),
-        sampleSize: reviews.reviewCount,
+        sampleSize: reviews.ratingEvidenceCount,
         timestamp: DATA_LAYER_TIMESTAMP,
         confidence: 90,
         metadata: {
@@ -62,20 +62,22 @@ export const mockReviewsProvider: TrendSignalProvider = {
           mode: "mock",
           provider,
           providerLabel: label,
-          providerMetric: "reviewCount",
+          providerMetric: "ratingEvidenceCount",
         },
-        value: reviews.reviewCount,
-        // Review count is log-scaled from 20 to 20,000 so early credibility
-        // rises quickly without letting large catalogs dominate.
-        normalizedValue: normalize(normalizeLogScale(reviews.reviewCount, 20, 20000)),
-        sampleSize: reviews.reviewCount,
+        value: reviews.ratingEvidenceCount,
+        // Rating evidence is log-scaled from 20 to 20,000 so early credibility
+        // rises quickly without letting large products dominate.
+        normalizedValue: normalize(normalizeLogScale(reviews.ratingEvidenceCount, 20, 20000)),
+        sampleSize: reviews.ratingEvidenceCount,
         timestamp: DATA_LAYER_TIMESTAMP,
         confidence: 91,
         metadata: {
           provider,
-          providerMetric: "reviewCount",
-          engineField: "reviewCount",
-          engineValue: reviews.reviewCount,
+          providerMetric: "ratingEvidenceCount",
+          ratingEvidenceComposition: "fallback_rating_review_evidence",
+          fallbackReviewCountEquivalent: reviews.ratingEvidenceCount,
+          engineField: "ratingEvidenceCount",
+          engineValue: reviews.ratingEvidenceCount,
         },
       },
       {
@@ -92,7 +94,7 @@ export const mockReviewsProvider: TrendSignalProvider = {
         // Verified-purchase share below 30% is fragile; 95%+ is excellent and
         // capped for the mock provider layer.
         normalizedValue: normalize(normalizeLinear(reviews.verifiedPurchasePercent, 30, 95)),
-        sampleSize: reviews.reviewCount,
+        sampleSize: reviews.ratingEvidenceCount,
         timestamp: DATA_LAYER_TIMESTAMP,
         confidence: 88,
         metadata: {
@@ -260,7 +262,7 @@ export class ReviewQualitySignalProvider implements AsyncTrendSignalProvider {
         locationCode: this.config.locationCode,
         languageCode: this.config.languageCode,
       });
-      const result = buildReviewAverageRatingSignalFromObservation({
+      const result = buildReviewQualitySignalsFromObservation({
         productId,
         observation,
       });

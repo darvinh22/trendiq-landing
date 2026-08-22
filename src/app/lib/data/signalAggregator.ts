@@ -36,7 +36,7 @@ export const EXPECTED_ENGINE_FIELDS: readonly EngineField[] = [
   ["sentiment", "positiveMentionPercent"],
   ["sentiment", "negativeMentionPercent"],
   ["reviewQuality", "averageRating"],
-  ["reviewQuality", "reviewCount"],
+  ["reviewQuality", "ratingEvidenceCount"],
   ["reviewQuality", "verifiedPurchasePercent"],
   ["reviewQuality", "recentAverageRating"],
   ["purchaseIntent", "buyingKeywordSharePercent"],
@@ -324,7 +324,7 @@ export function aggregateSignals(
     },
     reviewQuality: {
       averageRating: averageField(values, "reviewQuality", "averageRating"),
-      reviewCount: averageField(values, "reviewQuality", "reviewCount"),
+      ratingEvidenceCount: averageField(values, "reviewQuality", "ratingEvidenceCount"),
       verifiedPurchasePercent: averageField(values, "reviewQuality", "verifiedPurchasePercent"),
       recentAverageRating: averageField(values, "reviewQuality", "recentAverageRating"),
     },

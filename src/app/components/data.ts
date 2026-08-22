@@ -440,7 +440,7 @@ const MOCK_SIGNAL_INPUTS: Record<string, TrendIQSignalInputs> = {
     },
     reviewQuality: {
       averageRating: 4.4,
-      reviewCount: 2900,
+      ratingEvidenceCount: 2900,
       verifiedPurchasePercent: 85,
       recentAverageRating: 4.3,
     },
@@ -489,7 +489,7 @@ const MOCK_SIGNAL_INPUTS: Record<string, TrendIQSignalInputs> = {
     },
     reviewQuality: {
       averageRating: 4.2,
-      reviewCount: 1500,
+      ratingEvidenceCount: 1500,
       verifiedPurchasePercent: 78,
       recentAverageRating: 4,
     },
@@ -538,7 +538,7 @@ const MOCK_SIGNAL_INPUTS: Record<string, TrendIQSignalInputs> = {
     },
     reviewQuality: {
       averageRating: 4.5,
-      reviewCount: 5200,
+      ratingEvidenceCount: 5200,
       verifiedPurchasePercent: 88,
       recentAverageRating: 4.4,
     },
@@ -587,7 +587,7 @@ const MOCK_SIGNAL_INPUTS: Record<string, TrendIQSignalInputs> = {
     },
     reviewQuality: {
       averageRating: 4.6,
-      reviewCount: 9600,
+      ratingEvidenceCount: 9600,
       verifiedPurchasePercent: 90,
       recentAverageRating: 4.55,
     },
@@ -636,7 +636,7 @@ const MOCK_SIGNAL_INPUTS: Record<string, TrendIQSignalInputs> = {
     },
     reviewQuality: {
       averageRating: 4.85,
-      reviewCount: 10500,
+      ratingEvidenceCount: 10500,
       verifiedPurchasePercent: 92,
       recentAverageRating: 4.82,
     },
@@ -685,7 +685,7 @@ const MOCK_SIGNAL_INPUTS: Record<string, TrendIQSignalInputs> = {
     },
     reviewQuality: {
       averageRating: 4.7,
-      reviewCount: 18000,
+      ratingEvidenceCount: 18000,
       verifiedPurchasePercent: 72,
       recentAverageRating: 4.75,
     },
@@ -734,7 +734,7 @@ const MOCK_SIGNAL_INPUTS: Record<string, TrendIQSignalInputs> = {
     },
     reviewQuality: {
       averageRating: 4.55,
-      reviewCount: 25000,
+      ratingEvidenceCount: 25000,
       verifiedPurchasePercent: 86,
       recentAverageRating: 4.5,
     },
@@ -783,7 +783,7 @@ const MOCK_SIGNAL_INPUTS: Record<string, TrendIQSignalInputs> = {
     },
     reviewQuality: {
       averageRating: 4.78,
-      reviewCount: 12500,
+      ratingEvidenceCount: 12500,
       verifiedPurchasePercent: 91,
       recentAverageRating: 4.74,
     },
