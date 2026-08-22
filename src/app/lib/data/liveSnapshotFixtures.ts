@@ -4,10 +4,16 @@ import { calculateTrendIQScore } from "../scoring/scoreEngine";
 import { RAY_BAN_META_PRODUCT_ID } from "./mockProviderSignals";
 import { merchantProvider } from "./providers/merchantProvider";
 import { mockRedditProvider } from "./providers/redditProvider";
-import { reviewsProvider } from "./providers/reviewsProvider";
+import { mergeLiveReviewSignalsWithMockFallback, mockReviewsProvider } from "./providers/reviewsProvider";
 import { socialProvider } from "./providers/socialProvider";
 import { aggregateSignals } from "./signalAggregator";
 import { buildTrendIQSnapshotProvenanceSummary } from "./liveDataAudit";
+import {
+  DATAFORSEO_GOOGLE_SHOPPING_PRODUCTS_TASK_GET_ADVANCED_PATH_PREFIX,
+  mapDataForSeoGoogleShoppingProductsResponse,
+} from "./reviews/client";
+import { readReviewProviderConfig } from "./reviews/config";
+import { buildReviewAverageRatingSignalFromObservation } from "./reviews/signalBuilder";
 import {
   DATAFORSEO_GOOGLE_ADS_SEARCH_VOLUME_PATH,
   mapDataForSeoGoogleAdsSearchVolumeResponse,
@@ -124,10 +130,53 @@ export const VALIDATED_RAY_BAN_META_DATAFORSEO_SEARCH_VOLUME_RESPONSE = {
   ],
 } as const;
 
+// Sanitized fixture captured from a DataForSEO Google Shopping Products task
+// validation. It keeps only the accepted aggregate product result needed for
+// Phase 3B review-quality provenance.
+export const VALIDATED_RAY_BAN_META_DATAFORSEO_GOOGLE_SHOPPING_PRODUCTS_RESPONSE = {
+  status_code: 20000,
+  status_message: "Ok.",
+  tasks_error: 0,
+  tasks: [
+    {
+      status_code: 20000,
+      status_message: "Ok.",
+      result_count: 1,
+      result: [
+        {
+          datetime: "2026-08-21 23:47:20 +00:00",
+          items: [
+            {
+              type: "google_shopping_serp",
+              rank_group: 1,
+              rank_absolute: 1,
+              title: "Meta Ray-Ban Wayfarer",
+              seller: "Meta",
+              product_id: "11716803554991446550",
+              data_docid: "4690297997048968068",
+              gid: "11193998885220934472",
+              is_best_match: false,
+              product_rating: {
+                value: 4.4,
+                rating_max: 5,
+                votes_count: 1700,
+              },
+            },
+          ],
+        },
+      ],
+    },
+  ],
+} as const;
+
 export function buildValidatedRayBanMetaLiveSnapshot(): ProductTrendSnapshot {
   const timestamp = VALIDATED_RAY_BAN_META_LIVE_TIMESTAMP;
   const now = new Date(timestamp);
   const config = readSearchProviderConfig({}, {
+    mode: "live",
+    now: () => now,
+  });
+  const reviewConfig = readReviewProviderConfig({}, {
     mode: "live",
     now: () => now,
   });
@@ -164,10 +213,28 @@ export function buildValidatedRayBanMetaLiveSnapshot(): ProductTrendSnapshot {
     [...liveSearchResult.signals, ...liveVolumeSignals],
     mockSearchProvider.getSignals(RAY_BAN_META_PRODUCT_ID)
   );
+  const reviewObservation = mapDataForSeoGoogleShoppingProductsResponse({
+    response: VALIDATED_RAY_BAN_META_DATAFORSEO_GOOGLE_SHOPPING_PRODUCTS_RESPONSE,
+    productId: RAY_BAN_META_PRODUCT_ID,
+    identity: reviewConfig.productIdentities[RAY_BAN_META_PRODUCT_ID],
+    locationCode: reviewConfig.locationCode,
+    languageCode: reviewConfig.languageCode,
+    fetchedAt: timestamp,
+    endpoint: DATAFORSEO_GOOGLE_SHOPPING_PRODUCTS_TASK_GET_ADVANCED_PATH_PREFIX,
+    minimumMatchConfidence: reviewConfig.minimumMatchConfidence,
+  });
+  const liveReviewSignals = buildReviewAverageRatingSignalFromObservation({
+    productId: RAY_BAN_META_PRODUCT_ID,
+    observation: reviewObservation,
+  }).signals;
+  const reviewSignals = mergeLiveReviewSignalsWithMockFallback(
+    liveReviewSignals,
+    mockReviewsProvider.getSignals(RAY_BAN_META_PRODUCT_ID)
+  );
   const rawSignals = [
     ...searchSignals,
     ...mockRedditProvider.getSignals(RAY_BAN_META_PRODUCT_ID),
-    ...reviewsProvider.getSignals(RAY_BAN_META_PRODUCT_ID),
+    ...reviewSignals,
     ...socialProvider.getSignals(RAY_BAN_META_PRODUCT_ID),
     ...merchantProvider.getSignals(RAY_BAN_META_PRODUCT_ID),
   ];

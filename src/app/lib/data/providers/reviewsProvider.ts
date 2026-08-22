@@ -1,6 +1,16 @@
 import { normalizeInverseLinear, normalizeLinear, normalizeLogScale, roundTo } from "../../scoring/normalization";
 import { DATA_LAYER_TIMESTAMP, RAY_BAN_META_PRODUCT_ID, RAY_BAN_META_SIGNAL_INPUTS } from "../mockProviderSignals";
-import type { NormalizedTrendSignal, TrendSignalProvider } from "../types";
+import { InMemorySearchCache, type SearchCache } from "../search/cache";
+import {
+  DataForSeoGoogleShoppingProductsClient,
+  buildReviewAverageRatingSignalFromObservation,
+  readReviewProviderConfig,
+  shouldUseLiveReviews,
+  type GoogleShoppingReviewsClient,
+  type ReviewProviderConfig,
+  type ReviewSignalBuildResult,
+} from "../reviews";
+import type { AsyncTrendSignalProvider, NormalizedTrendSignal, TrendSignalProvider } from "../types";
 
 const source = "reviews" as const;
 const label = "Product reviews";
@@ -10,7 +20,7 @@ function normalize(value: number): number {
   return roundTo(value, 2);
 }
 
-export const reviewsProvider: TrendSignalProvider = {
+export const mockReviewsProvider: TrendSignalProvider = {
   id: source,
   label,
   getSignals(productId: string): NormalizedTrendSignal[] {
@@ -163,3 +173,124 @@ export const reviewsProvider: TrendSignalProvider = {
     ];
   },
 };
+
+export interface ReviewQualitySignalProviderDependencies {
+  client?: GoogleShoppingReviewsClient;
+  cache?: SearchCache<ReviewSignalBuildResult>;
+  fallbackProvider?: TrendSignalProvider;
+}
+
+function engineKey(signal: NormalizedTrendSignal): string | undefined {
+  const field = signal.metadata?.engineField;
+  return field ? `${signal.signalType}.${field}` : undefined;
+}
+
+function asLiveFallbackSignal(signal: NormalizedTrendSignal): NormalizedTrendSignal {
+  return {
+    ...signal,
+    sourceProvenance: {
+      ...signal.sourceProvenance,
+      mode: "fallback",
+      notes: signal.sourceProvenance.notes
+        ?? "Mock review field retained because live DataForSEO Google Shopping did not supply this engine field.",
+    },
+  };
+}
+
+export function mergeLiveReviewSignalsWithMockFallback(
+  liveSignals: NormalizedTrendSignal[],
+  mockSignals: NormalizedTrendSignal[]
+): NormalizedTrendSignal[] {
+  const liveEngineKeys = new Set(liveSignals.map(engineKey).filter((key): key is string => Boolean(key)));
+  const untouchedMockSignals = mockSignals
+    .filter((signal) => {
+      const key = engineKey(signal);
+      return !key || !liveEngineKeys.has(key);
+    })
+    .map(asLiveFallbackSignal);
+
+  return [...untouchedMockSignals, ...liveSignals];
+}
+
+export class ReviewQualitySignalProvider implements AsyncTrendSignalProvider {
+  readonly id = source;
+  readonly label = label;
+  private readonly cache: SearchCache<ReviewSignalBuildResult>;
+  private readonly fallbackProvider: TrendSignalProvider;
+
+  constructor(
+    private readonly config: ReviewProviderConfig = readReviewProviderConfig(),
+    private readonly dependencies: ReviewQualitySignalProviderDependencies = {}
+  ) {
+    this.cache = dependencies.cache ?? new InMemorySearchCache<ReviewSignalBuildResult>();
+    this.fallbackProvider = dependencies.fallbackProvider ?? mockReviewsProvider;
+  }
+
+  getSignals(productId: string): NormalizedTrendSignal[] {
+    const identity = this.config.productIdentities[productId];
+    if (!identity) return [];
+
+    const cached = this.cache.get(this.cacheKey(productId), this.config.now().getTime());
+    if (this.config.mode === "live" && cached?.signals.length) {
+      return mergeLiveReviewSignalsWithMockFallback(cached.signals, this.fallbackProvider.getSignals(productId));
+    }
+
+    return this.fallbackProvider.getSignals(productId);
+  }
+
+  async getSignalsAsync(productId: string): Promise<NormalizedTrendSignal[]> {
+    const identity = this.config.productIdentities[productId];
+    if (!identity) return [];
+
+    if (!shouldUseLiveReviews(this.config)) {
+      return this.fallbackProvider.getSignals(productId);
+    }
+
+    const cacheKey = this.cacheKey(productId);
+    const cached = this.cache.get(cacheKey, this.config.now().getTime());
+    if (cached?.signals.length) {
+      return mergeLiveReviewSignalsWithMockFallback(cached.signals, this.fallbackProvider.getSignals(productId));
+    }
+
+    try {
+      const client = this.dependencies.client ?? new DataForSeoGoogleShoppingProductsClient(this.config);
+      const observation = await client.getProductReviewAggregate({
+        productId,
+        identity,
+        locationCode: this.config.locationCode,
+        languageCode: this.config.languageCode,
+      });
+      const result = buildReviewAverageRatingSignalFromObservation({
+        productId,
+        observation,
+      });
+
+      this.cache.set(cacheKey, result, this.config.cacheTtlMs, this.config.now().getTime());
+      return mergeLiveReviewSignalsWithMockFallback(result.signals, this.fallbackProvider.getSignals(productId));
+    } catch {
+      return this.fallbackProvider.getSignals(productId).map(asLiveFallbackSignal);
+    }
+  }
+
+  private cacheKey(productId: string): string {
+    const identity = this.config.productIdentities[productId];
+
+    return [
+      "reviews",
+      this.config.provider,
+      productId,
+      identity?.canonicalSearchQuery ?? "",
+      this.config.locationCode,
+      this.config.languageCode,
+    ].join(":");
+  }
+}
+
+export function createReviewQualitySignalProvider(
+  config: ReviewProviderConfig = readReviewProviderConfig(),
+  dependencies: ReviewQualitySignalProviderDependencies = {}
+): ReviewQualitySignalProvider {
+  return new ReviewQualitySignalProvider(config, dependencies);
+}
+
+export const reviewsProvider = createReviewQualitySignalProvider();

@@ -12,7 +12,12 @@ export {
   RedditTrendSignalProvider,
   redditProvider,
 } from "./redditProvider";
-export { reviewsProvider } from "./reviewsProvider";
+export {
+  createReviewQualitySignalProvider,
+  mockReviewsProvider,
+  ReviewQualitySignalProvider,
+  reviewsProvider,
+} from "./reviewsProvider";
 export { socialProvider } from "./socialProvider";
 export {
   createSearchTrendSignalProvider,

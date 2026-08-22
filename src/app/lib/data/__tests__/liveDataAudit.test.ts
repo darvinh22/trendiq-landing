@@ -82,8 +82,9 @@ describe("live data audit", () => {
 
     expect(audit?.liveCoveragePercent).toBeGreaterThan(0);
     expect(audit?.liveCoveragePercent).toBeLessThan(100);
-    expect(audit?.liveComponents).toEqual(["searchMomentum", "growthVelocity"]);
+    expect(audit?.liveComponents).toEqual(["searchMomentum", "reviewQuality", "growthVelocity"]);
     expect(audit?.mockFallbackComponents).toContain("searchMomentum");
+    expect(audit?.mockFallbackComponents).toContain("reviewQuality");
     expect(audit?.mockFallbackComponents).not.toContain("growthVelocity");
     expect(audit?.mockFallbackComponents).toContain("sentiment");
     expect(audit?.weightedLiveIQContribution).toBeGreaterThan(0);
@@ -113,10 +114,19 @@ describe("live data audit", () => {
   it("marks only components that still combine live and fallback fields as derived-mixed", () => {
     const searchComponent = VALIDATED_RAY_BAN_META_LIVE_SNAPSHOT.liveDataAudit?.componentSummaries
       .find((component) => component.component === "searchMomentum");
+    const reviewComponent = VALIDATED_RAY_BAN_META_LIVE_SNAPSHOT.liveDataAudit?.componentSummaries
+      .find((component) => component.component === "reviewQuality");
     const growthComponent = VALIDATED_RAY_BAN_META_LIVE_SNAPSHOT.liveDataAudit?.componentSummaries
       .find((component) => component.component === "growthVelocity");
 
     expect(searchComponent?.provenance).toBe("derived-mixed");
+    expect(reviewComponent?.provenance).toBe("derived-mixed");
+    expect(reviewComponent?.fields.find((field) =>
+      field.engineField === "averageRating"
+    )?.provenance).toBe("live");
+    expect(reviewComponent?.fields.find((field) =>
+      field.engineField === "reviewCount"
+    )?.provenance).toBe("fallback");
     expect(growthComponent?.provenance).toBe("derived-live");
     expect(growthComponent?.liveCoveragePercent).toBe(100);
     expect(growthComponent?.fields.find((field) =>

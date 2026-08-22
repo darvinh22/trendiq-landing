@@ -5,6 +5,7 @@ export * from "./liveSnapshotFixtures";
 export * from "./mockProviderSignals";
 export * from "./provenanceReport";
 export * from "./reddit";
+export * from "./reviews";
 export * from "./search";
 export * from "./signalAggregator";
 export * from "./snapshotEngine";
