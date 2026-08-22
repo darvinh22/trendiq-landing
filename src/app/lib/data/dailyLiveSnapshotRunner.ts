@@ -8,6 +8,7 @@ import { calculateCompatibleHistoricalMomentum } from "./history";
 import { buildTrendIQSnapshotProvenanceSummary } from "./liveDataAudit";
 import { buildProductTrendSnapshotAsync } from "./snapshotEngine";
 import { toHistoricalTrendSnapshot, type LocalTrendSnapshotStore } from "./snapshotStore";
+import type { ProductProfile } from "./capabilities";
 import type {
   HistoricalTrendSnapshot,
   ProductTrendSnapshot,
@@ -39,6 +40,7 @@ export interface DailyLiveSnapshotSummary {
   liveSignalCount: number;
   mockSignalCount: number;
   liveCoveragePercent?: number;
+  productProfile?: ProductProfile;
   historicalMomentum: {
     isProvisional: boolean;
     compatibleSnapshotCount: number;
@@ -57,6 +59,7 @@ export interface DailyLiveSnapshotResult {
 
 export interface RunDailyLiveSnapshotOptions {
   productId: string;
+  productProfile?: ProductProfile;
   store: LocalTrendSnapshotStore;
   searchProvider: TrendSignalProvider;
   timestamp?: string;
@@ -106,6 +109,7 @@ function liveHistoricalSnapshotsForVersion(
 function summarizeSnapshot(input: {
   productId: string;
   timestamp: string;
+  productProfile?: ProductProfile;
   snapshot?: ProductTrendSnapshot;
   compatibleHistoricalSnapshots: HistoricalTrendSnapshot[];
 }): DailyLiveSnapshotSummary {
@@ -139,6 +143,7 @@ function summarizeSnapshot(input: {
     liveSignalCount,
     mockSignalCount: Math.max(0, totalSignalCount - liveSignalCount),
     liveCoveragePercent: input.snapshot?.liveDataAudit?.liveCoveragePercent,
+    productProfile: input.productProfile,
     historicalMomentum: {
       isProvisional: !momentum.isReady,
       compatibleSnapshotCount: momentum.compatibleSnapshotCount,
@@ -156,28 +161,30 @@ export async function runDailyLiveSnapshot(
 ): Promise<DailyLiveSnapshotResult> {
   const timestamp = options.timestamp ?? new Date().toISOString();
   const utcDay = utcDayForTimestamp(timestamp);
+  const productId = options.productProfile?.productId ?? options.productId;
 
-  if (!DAILY_LIVE_SNAPSHOT_SUPPORTED_PRODUCTS.includes(options.productId as typeof RAY_BAN_META_PRODUCT_ID)) {
+  if (!options.productProfile && !DAILY_LIVE_SNAPSHOT_SUPPORTED_PRODUCTS.includes(productId as typeof RAY_BAN_META_PRODUCT_ID)) {
     return {
       status: "unsupported_product",
-      message: `Live daily snapshots currently support ${RAY_BAN_META_PRODUCT_ID} only.`,
+      message: `Legacy productId-only live snapshots currently support ${RAY_BAN_META_PRODUCT_ID} only. Submit a ProductProfile for dynamic products.`,
       summary: summarizeSnapshot({
-        productId: options.productId,
+        productId,
         timestamp,
+        productProfile: options.productProfile,
         compatibleHistoricalSnapshots: [],
       }),
     };
   }
 
   const existingSnapshot = findCompatibleLiveSnapshotForUtcDay({
-    snapshots: options.store.list(options.productId, { sourceMode: "live" }),
-    productId: options.productId,
+    snapshots: options.store.list(productId, { sourceMode: "live" }),
+    productId,
     utcDay,
   });
 
   if (existingSnapshot) {
     const compatibleHistoricalSnapshots = liveHistoricalSnapshotsForVersion(
-      options.store.listHistorical(options.productId, { sourceMode: "live" }),
+      options.store.listHistorical(productId, { sourceMode: "live" }),
       existingSnapshot.trendIQScore.scoreVersion
     );
 
@@ -186,8 +193,9 @@ export async function runDailyLiveSnapshot(
       existingSnapshot,
       message: "Today's compatible live snapshot already exists; no provider request was made.",
       summary: summarizeSnapshot({
-        productId: options.productId,
+        productId,
         timestamp: existingSnapshot.timestamp,
+        productProfile: options.productProfile,
         snapshot: existingSnapshot,
         compatibleHistoricalSnapshots,
       }),
@@ -198,7 +206,7 @@ export async function runDailyLiveSnapshot(
     options.searchProvider,
     ...(options.nonSearchProviders ?? DAILY_LIVE_SNAPSHOT_MOCK_FALLBACK_PROVIDERS),
   ];
-  let snapshot = await buildProductTrendSnapshotAsync(options.productId, providers, {
+  let snapshot = await buildProductTrendSnapshotAsync(productId, providers, {
     timestamp,
     sourceMode: "live",
   });
@@ -212,11 +220,12 @@ export async function runDailyLiveSnapshot(
       snapshot,
       message: "No DataForSEO-backed search signals were available; live snapshot was not saved.",
       summary: summarizeSnapshot({
-        productId: options.productId,
+        productId,
         timestamp,
+        productProfile: options.productProfile,
         snapshot,
         compatibleHistoricalSnapshots: liveHistoricalSnapshotsForVersion(
-          options.store.listHistorical(options.productId, { sourceMode: "live" }),
+          options.store.listHistorical(productId, { sourceMode: "live" }),
           snapshot.trendIQScore.scoreVersion
         ),
       }),
@@ -225,7 +234,7 @@ export async function runDailyLiveSnapshot(
 
   const historyWithCurrent = [
     ...liveHistoricalSnapshotsForVersion(
-      options.store.listHistorical(options.productId, { sourceMode: "live" }),
+      options.store.listHistorical(productId, { sourceMode: "live" }),
       snapshot.trendIQScore.scoreVersion
     ),
     toHistoricalTrendSnapshot(snapshot),
@@ -260,8 +269,9 @@ export async function runDailyLiveSnapshot(
     snapshot,
     message: "Created one live daily TrendIQ snapshot.",
     summary: summarizeSnapshot({
-      productId: options.productId,
+      productId,
       timestamp,
+      productProfile: options.productProfile,
       snapshot,
       compatibleHistoricalSnapshots: historyWithCurrent,
     }),

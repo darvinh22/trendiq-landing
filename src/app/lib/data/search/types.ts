@@ -1,4 +1,5 @@
 import type { NormalizedTrendSignal } from "../types";
+import type { ProductProfile } from "../capabilities";
 
 export type SearchProviderMode = "mock" | "live";
 export type SearchProviderVendor = "dataforseo";
@@ -30,6 +31,7 @@ export interface SearchProviderConfig {
   interestType: SearchInterestType;
   timeRange: SearchInterestTimeRange;
   productQueries: Record<string, SearchProductQueryConfig>;
+  productProfiles?: Record<string, ProductProfile>;
   now: () => Date;
 }
 

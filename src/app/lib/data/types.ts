@@ -160,6 +160,9 @@ export interface TrendIQSnapshotProvenanceSummary {
   liveBackedScoringWeight: number;
   mockFallbackScoringWeight: number;
   liveCoveragePercent: number;
+  confidenceProvenanceWarning: boolean;
+  confidenceProvenanceWarningReason?: string;
+  confidenceProvenanceWarningThresholdPercent: number;
   reddit: RedditProvenanceStatus;
 }
 

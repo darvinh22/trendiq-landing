@@ -10,6 +10,7 @@ import {
   runDailyLiveSnapshot,
   utcDayForTimestamp,
 } from "../dailyLiveSnapshotRunner";
+import { createUserSearchProductProfile } from "../capabilities";
 import { buildProductTrendSnapshot } from "../snapshotEngine";
 import { createLocalTrendSnapshotStore } from "../snapshotStore";
 import type { NormalizedTrendSignal, ProductTrendSnapshot, TrendSignalProvider } from "../types";
@@ -181,5 +182,36 @@ describe("daily live snapshot runner", () => {
   it("derives duplicate protection from UTC calendar days", () => {
     expect(utcDayForTimestamp("2026-08-13T23:59:59.999Z")).toBe("2026-08-13");
     expect(utcDayForTimestamp("2026-08-14T00:00:00.000Z")).toBe("2026-08-14");
+  });
+
+  it("accepts a dynamic ProductProfile contract without requiring catalog registration", async () => {
+    const productProfile = createUserSearchProductProfile("Garmin Venu 4", {
+      productType: "hardware",
+      brand: "Garmin",
+      identityConfidence: "medium",
+    });
+    const store = createLocalTrendSnapshotStore();
+    const counter = { calls: 0 };
+
+    const result = await runDailyLiveSnapshot({
+      productId: productProfile.productId,
+      productProfile,
+      store,
+      searchProvider: {
+        id: "searchWeb",
+        label: "No live data fixture",
+        getSignals: () => [],
+        getSignalsAsync: async () => {
+          counter.calls += 1;
+          return [];
+        },
+      },
+      nonSearchProviders: [],
+      timestamp,
+    });
+
+    expect(result.status).toBe("failed_no_live_data");
+    expect(counter.calls).toBe(1);
+    expect(result.summary.productProfile?.query).toBe("Garmin Venu 4");
   });
 });

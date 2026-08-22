@@ -1,4 +1,5 @@
 export * from "./dailyLiveSnapshotRunner";
+export * from "./capabilities";
 export * from "./history";
 export * from "./liveDataAudit";
 export * from "./liveSnapshotFixtures";

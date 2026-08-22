@@ -1,9 +1,11 @@
 import { normalizeInverseLinear, normalizeLinear, normalizeLogScale, roundTo } from "../../scoring/normalization";
 import { DATA_LAYER_TIMESTAMP, RAY_BAN_META_PRODUCT_ID, RAY_BAN_META_SIGNAL_INPUTS } from "../mockProviderSignals";
+import { canUseProvider, createUserSearchProductProfile, profileWithProviderIds, type ProductProfile } from "../capabilities";
 import { InMemorySearchCache, type SearchCache } from "../search/cache";
 import {
   DataForSeoGoogleShoppingReviewsClient,
   DataForSeoGoogleShoppingProductsClient,
+  buildReviewProductIdentityFromProfile,
   buildReviewQualitySignalsFromObservation,
   readReviewProviderConfig,
   shouldUseLiveReviews,
@@ -234,8 +236,8 @@ export class ReviewQualitySignalProvider implements AsyncTrendSignalProvider {
   }
 
   getSignals(productId: string): NormalizedTrendSignal[] {
-    const identity = this.config.productIdentities[productId];
-    if (!identity) return [];
+    const profile = this.profileForProductId(productId);
+    if (!profile) return [];
 
     const cached = this.cache.get(this.cacheKey(productId), this.config.now().getTime());
     if (this.config.mode === "live" && cached?.signals.length) {
@@ -246,13 +248,24 @@ export class ReviewQualitySignalProvider implements AsyncTrendSignalProvider {
   }
 
   async getSignalsAsync(productId: string): Promise<NormalizedTrendSignal[]> {
-    const identity = this.config.productIdentities[productId];
-    if (!identity) return [];
+    const profile = this.profileForProductId(productId);
+    if (!profile) return [];
 
+    return this.getSignalsForProfile(profile);
+  }
+
+  async getSignalsForProfile(profile: ProductProfile): Promise<NormalizedTrendSignal[]> {
     if (!shouldUseLiveReviews(this.config)) {
-      return this.fallbackProvider.getSignals(productId);
+      return this.fallbackProvider.getSignals(profile.productId);
     }
 
+    const aggregateDecision = canUseProvider(profile, "dataforseo_google_shopping", "reviews");
+    if (!aggregateDecision.allowed) {
+      return this.fallbackProvider.getSignals(profile.productId).map(asLiveFallbackSignal);
+    }
+
+    const productId = profile.productId;
+    const identity = this.identityForProfile(profile);
     const cacheKey = this.cacheKey(productId);
     const cached = this.cache.get(cacheKey, this.config.now().getTime());
     if (cached?.signals.length) {
@@ -270,6 +283,7 @@ export class ReviewQualitySignalProvider implements AsyncTrendSignalProvider {
       const recentReviews = await this.getRecentReviews({
         productId,
         identity,
+        profile,
         observation,
       });
       const result = buildReviewQualitySignalsFromObservation({
@@ -286,7 +300,8 @@ export class ReviewQualitySignalProvider implements AsyncTrendSignalProvider {
   }
 
   private cacheKey(productId: string): string {
-    const identity = this.config.productIdentities[productId];
+    const profile = this.profileForProductId(productId);
+    const identity = profile ? this.identityForProfile(profile) : this.config.productIdentities[productId];
 
     return [
       "reviews",
@@ -305,9 +320,22 @@ export class ReviewQualitySignalProvider implements AsyncTrendSignalProvider {
   private async getRecentReviews(input: {
     productId: string;
     identity: NonNullable<ReviewProviderConfig["productIdentities"][string]>;
+    profile: ProductProfile;
     observation: Awaited<ReturnType<GoogleShoppingReviewsClient["getProductReviewAggregate"]>>;
   }) {
     try {
+      const enrichedProfile = profileWithProviderIds(
+        input.profile,
+        "dataforseo_google_shopping_reviews",
+        input.observation.identifiers
+      );
+      const reviewsDecision = canUseProvider(
+        enrichedProfile,
+        "dataforseo_google_shopping_reviews",
+        "reviews"
+      );
+      if (!reviewsDecision.allowed) return undefined;
+
       const client = this.dependencies.recentReviewsClient
         ?? new DataForSeoGoogleShoppingReviewsClient(this.config);
 
@@ -323,6 +351,38 @@ export class ReviewQualitySignalProvider implements AsyncTrendSignalProvider {
     } catch {
       return undefined;
     }
+  }
+
+  private profileForProductId(productId: string): ProductProfile | undefined {
+    const configuredProfile = this.config.productProfiles?.[productId];
+    if (configuredProfile) return configuredProfile;
+
+    const identity = this.config.productIdentities[productId];
+    if (!identity) return undefined;
+
+    return createUserSearchProductProfile(identity.canonicalSearchQuery, {
+      productId,
+      source: "resolved_provider",
+      canonicalTitle: identity.productTitle,
+      brand: identity.brand,
+      aliases: [identity.canonicalSearchQuery, identity.productTitle],
+      modelGeneration: identity.generation,
+      identityConfidence: identity.providerProductIds?.matchConfidence === "high" ? "high" : "medium",
+      providerIds: identity.providerProductIds ? {
+        dataforseo_google_shopping: identity.providerProductIds,
+        dataforseo_google_shopping_reviews: identity.providerProductIds,
+      } : undefined,
+      guardrails: {
+        requireExactBrandMatch: true,
+        requireModelGenerationMatch: Boolean(identity.generation),
+        excludeAccessories: true,
+        excludeBundles: true,
+      },
+    });
+  }
+
+  private identityForProfile(profile: ProductProfile) {
+    return this.config.productIdentities[profile.productId] ?? buildReviewProductIdentityFromProfile(profile);
   }
 }
 

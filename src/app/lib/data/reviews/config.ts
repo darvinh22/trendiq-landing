@@ -1,4 +1,5 @@
 import { RAY_BAN_META_PRODUCT_ID } from "../mockProviderSignals";
+import { VALIDATION_PRODUCT_PROFILES, type ProductProfile } from "../capabilities";
 import type {
   ProductMatchConfidence,
   ReviewProviderConfig,
@@ -59,6 +60,42 @@ export const REVIEW_PRODUCT_IDENTITIES: ReviewProviderConfig["productIdentities"
   },
 };
 
+export const REVIEW_PRODUCT_PROFILES: NonNullable<ReviewProviderConfig["productProfiles"]> = {
+  [RAY_BAN_META_PRODUCT_ID]: VALIDATION_PRODUCT_PROFILES[RAY_BAN_META_PRODUCT_ID],
+};
+
+function providerIdsForReviewIdentity(profile: ProductProfile) {
+  const aggregateIds = profile.providerIds?.dataforseo_google_shopping;
+  if (!aggregateIds || typeof aggregateIds !== "object") return undefined;
+
+  const ids = aggregateIds as {
+    productId?: string;
+    dataDocid?: string;
+    gid?: string;
+    observedAt?: string;
+    matchConfidence?: ProductMatchConfidence;
+  };
+
+  return {
+    productId: ids.productId,
+    dataDocid: ids.dataDocid,
+    gid: ids.gid,
+    observedAt: ids.observedAt,
+    matchConfidence: ids.matchConfidence,
+  };
+}
+
+export function buildReviewProductIdentityFromProfile(profile: ProductProfile) {
+  return {
+    productId: profile.productId,
+    canonicalSearchQuery: profile.query,
+    productTitle: profile.canonicalTitle,
+    brand: profile.brand ?? profile.canonicalTitle,
+    generation: profile.modelGeneration,
+    providerProductIds: providerIdsForReviewIdentity(profile),
+  };
+}
+
 export function readReviewProviderConfig(
   env: RuntimeEnv = getRuntimeEnv(),
   overrides: Partial<ReviewProviderConfig> = {}
@@ -93,6 +130,7 @@ export function readReviewProviderConfig(
       ),
     minimumMatchConfidence: overrides.minimumMatchConfidence ?? "high",
     productIdentities: overrides.productIdentities ?? REVIEW_PRODUCT_IDENTITIES,
+    productProfiles: overrides.productProfiles ?? REVIEW_PRODUCT_PROFILES,
     now: overrides.now ?? (() => new Date()),
   };
 }

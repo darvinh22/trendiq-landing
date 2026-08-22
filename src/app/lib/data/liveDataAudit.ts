@@ -1,5 +1,10 @@
 import { TRENDIQ_SCORE_WEIGHTS } from "../scoring/scoreEngine";
 import { roundTo } from "../scoring/normalization";
+import {
+  CONFIDENCE_PROVENANCE_WARNING_THRESHOLD_PERCENT,
+  confidenceProvenanceWarningReason,
+  hasConfidenceProvenanceWarning,
+} from "./capabilities";
 import type {
   ConfidenceScoreResult,
   TrendIQScoreComponentKey,
@@ -270,6 +275,9 @@ export function buildTrendIQSnapshotProvenanceSummary(input: {
     componentSummaries.reduce((sum, component) => sum + component.mockFallbackWeight, 0),
     4
   );
+  const liveCoveragePercent = totalActiveScoringWeight > 0
+    ? roundTo((liveBackedScoringWeight / totalActiveScoringWeight) * 100, 1)
+    : 0;
 
   return {
     overallTrendIQScore: input.trendIQScore.score,
@@ -302,9 +310,16 @@ export function buildTrendIQSnapshotProvenanceSummary(input: {
     totalActiveScoringWeight,
     liveBackedScoringWeight,
     mockFallbackScoringWeight,
-    liveCoveragePercent: totalActiveScoringWeight > 0
-      ? roundTo((liveBackedScoringWeight / totalActiveScoringWeight) * 100, 1)
-      : 0,
+    liveCoveragePercent,
+    confidenceProvenanceWarning: hasConfidenceProvenanceWarning({
+      confidenceLevel: input.confidence.level,
+      liveCoveragePercent,
+    }),
+    confidenceProvenanceWarningReason: confidenceProvenanceWarningReason({
+      confidenceLevel: input.confidence.level,
+      liveCoveragePercent,
+    }),
+    confidenceProvenanceWarningThresholdPercent: CONFIDENCE_PROVENANCE_WARNING_THRESHOLD_PERCENT,
     reddit: {
       mode: "mock/fallback",
       approvalStatus: "pending",

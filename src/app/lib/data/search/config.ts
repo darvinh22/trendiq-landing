@@ -1,4 +1,5 @@
 import { RAY_BAN_META_PRODUCT_ID } from "../mockProviderSignals";
+import { VALIDATION_PRODUCT_PROFILES } from "../capabilities";
 import type { SearchInterestTimeRange, SearchProviderConfig, SearchProviderMode, SearchProviderVendor } from "./types";
 
 export const SEARCH_RAY_BAN_ALIASES = [
@@ -10,6 +11,10 @@ export const SEARCH_PRODUCT_QUERIES: SearchProviderConfig["productQueries"] = {
     productId: RAY_BAN_META_PRODUCT_ID,
     aliases: [...SEARCH_RAY_BAN_ALIASES],
   },
+};
+
+export const SEARCH_PRODUCT_PROFILES: NonNullable<SearchProviderConfig["productProfiles"]> = {
+  [RAY_BAN_META_PRODUCT_ID]: VALIDATION_PRODUCT_PROFILES[RAY_BAN_META_PRODUCT_ID],
 };
 
 const DEFAULT_API_BASE_URL = "https://api.dataforseo.com";
@@ -61,6 +66,7 @@ export function readSearchProviderConfig(
     interestType: overrides.interestType ?? "web",
     timeRange: overrides.timeRange ?? DEFAULT_TIME_RANGE,
     productQueries: overrides.productQueries ?? SEARCH_PRODUCT_QUERIES,
+    productProfiles: overrides.productProfiles ?? SEARCH_PRODUCT_PROFILES,
     now: overrides.now ?? (() => new Date()),
   };
 }

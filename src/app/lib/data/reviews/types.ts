@@ -1,4 +1,5 @@
 import type { NormalizedTrendSignal } from "../types";
+import type { ProductProfile } from "../capabilities";
 
 export type ReviewProviderMode = "mock" | "live";
 export type ReviewProviderVendor = "dataforseo";
@@ -41,6 +42,7 @@ export interface ReviewProviderConfig {
   recentReviewsProvisionalSampleSize: number;
   minimumMatchConfidence: ProductMatchConfidence;
   productIdentities: Record<string, ReviewProductIdentityConfig>;
+  productProfiles?: Record<string, ProductProfile>;
   now: () => Date;
 }
 

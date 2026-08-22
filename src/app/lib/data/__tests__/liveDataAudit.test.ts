@@ -103,6 +103,8 @@ describe("live data audit", () => {
     expect(ratingConsensusQualityField?.provenance).toBe("derived-live");
     expect(ratingConsensusQualityField?.liveBackedWeight).toBe(0.0225);
     expect(audit?.liveCoveragePercent).toBe(37);
+    expect(audit?.confidenceProvenanceWarning).toBe(true);
+    expect(audit?.confidenceProvenanceWarningThresholdPercent).toBe(50);
     expect(audit?.liveCoveragePercent).toBeGreaterThan(0);
     expect(audit?.liveCoveragePercent).toBeLessThan(100);
     expect(audit?.liveComponents).toEqual(["searchMomentum", "reviewQuality", "growthVelocity"]);
