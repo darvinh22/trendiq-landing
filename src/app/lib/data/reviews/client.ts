@@ -1,5 +1,6 @@
 import type { FetchLike } from "../search/client";
 import { evaluateGoogleShoppingProductMatch, matchConfidenceMeetsThreshold } from "./matching";
+import { buildRatingConsensusQuality } from "./ratingConsensus";
 import type {
   GoogleShoppingProductCandidate,
   GoogleShoppingRecentReviewsClient,
@@ -8,6 +9,7 @@ import type {
   GoogleShoppingReviewsClient,
   GoogleShoppingReviewObservation,
   ProductMatchConfidence,
+  RatingDistributionInput,
   ReviewProviderConfig,
   ReviewProductIdentityConfig,
 } from "./types";
@@ -66,6 +68,7 @@ interface DataForSeoGoogleShoppingReviewsResult {
   product_id?: string | null;
   datetime?: string;
   reviews_count?: number | null;
+  rating_groups?: DataForSeoGoogleShoppingRating[] | null;
   items_count?: number | null;
   items?: DataForSeoGoogleShoppingReviewItem[];
 }
@@ -485,6 +488,96 @@ function mapReviewItem(item: DataForSeoGoogleShoppingReviewItem): {
   };
 }
 
+function integerCount(value: unknown): number | undefined {
+  const numberValue = finiteNumber(value);
+  return typeof numberValue === "number" && numberValue >= 0 ? Math.round(numberValue) : undefined;
+}
+
+function starBucket(value: unknown): 1 | 2 | 3 | 4 | 5 | undefined {
+  const numberValue = finiteNumber(value);
+  if (typeof numberValue !== "number") return undefined;
+
+  const rounded = Math.round(numberValue);
+  return rounded >= 1 && rounded <= 5 ? rounded as 1 | 2 | 3 | 4 | 5 : undefined;
+}
+
+function incrementStarCount(distribution: Omit<
+  RatingDistributionInput,
+  "distributionSource" | "distributionScope" | "distributionComposition"
+>, star: 1 | 2 | 3 | 4 | 5, count: number) {
+  if (star === 1) distribution.star1Count += count;
+  if (star === 2) distribution.star2Count += count;
+  if (star === 3) distribution.star3Count += count;
+  if (star === 4) distribution.star4Count += count;
+  if (star === 5) distribution.star5Count += count;
+}
+
+function providerRatingDistribution(
+  ratingGroups: DataForSeoGoogleShoppingRating[] | null | undefined
+): RatingDistributionInput | undefined {
+  const distribution = {
+    star1Count: 0,
+    star2Count: 0,
+    star3Count: 0,
+    star4Count: 0,
+    star5Count: 0,
+  };
+
+  for (const group of ratingGroups ?? []) {
+    const star = starBucket(group.value);
+    const count = integerCount(group.rating_count ?? group.votes_count);
+
+    if (!star || typeof count !== "number") continue;
+    incrementStarCount(distribution, star, count);
+  }
+
+  const totalDistributionCount = distribution.star1Count
+    + distribution.star2Count
+    + distribution.star3Count
+    + distribution.star4Count
+    + distribution.star5Count;
+
+  if (!totalDistributionCount) return undefined;
+
+  return {
+    ...distribution,
+    distributionSource: "provider_rating_groups",
+    distributionScope: "full_provider_distribution",
+    distributionComposition: "provider_rating_group_counts",
+  };
+}
+
+function sampleRatingDistribution(items: Array<{ rating?: number }>): RatingDistributionInput | undefined {
+  const distribution = {
+    star1Count: 0,
+    star2Count: 0,
+    star3Count: 0,
+    star4Count: 0,
+    star5Count: 0,
+  };
+
+  for (const item of items) {
+    const star = starBucket(item.rating);
+    if (!star) continue;
+    incrementStarCount(distribution, star, 1);
+  }
+
+  const totalDistributionCount = distribution.star1Count
+    + distribution.star2Count
+    + distribution.star3Count
+    + distribution.star4Count
+    + distribution.star5Count;
+
+  if (!totalDistributionCount) return undefined;
+
+  return {
+    ...distribution,
+    distributionSource: "review_items",
+    distributionScope: "fetched_review_sample",
+    distributionComposition: "valid_ratings_from_fetched_review_items",
+  };
+}
+
 export function mapDataForSeoGoogleShoppingReviewsResponse(input: {
   response: unknown;
   productId: string;
@@ -500,6 +593,7 @@ export function mapDataForSeoGoogleShoppingReviewsResponse(input: {
   windowDays: number;
   minimumScoringSampleSize: number;
   provisionalSampleSize: number;
+  aggregateAverageRating?: number;
   endpoint?: string;
 }): GoogleShoppingRecentReviewsObservation {
   const task = findSuccessfulTask(
@@ -543,6 +637,14 @@ export function mapDataForSeoGoogleShoppingReviewsResponse(input: {
     : qualifyingItems.length >= input.provisionalSampleSize
       ? "provisional"
       : "insufficient";
+  const ratingDistribution = providerRatingDistribution(result?.rating_groups)
+    ?? sampleRatingDistribution(validRatingItems);
+  const ratingConsensus = ratingDistribution
+    ? buildRatingConsensusQuality({
+        ...ratingDistribution,
+        aggregateAverageRating: input.aggregateAverageRating,
+      })
+    : undefined;
 
   return {
     provider: "dataforseo",
@@ -575,6 +677,7 @@ export function mapDataForSeoGoogleShoppingReviewsResponse(input: {
     sourceDomains: uniqueSorted(qualifyingItems
       .map((item) => sourceDomain(item.providedBy) ?? sourceDomain(item.url))),
     reviews: qualifyingItems,
+    ratingConsensus,
     calculationMethod: "mean_rating_of_dated_reviews_in_trailing_90_days",
     datePrecision: "provider_observed_approximate_relative_timestamp",
     cost: task.cost,
@@ -733,6 +836,7 @@ export class DataForSeoGoogleShoppingReviewsClient implements GoogleShoppingRece
     locationCode: number;
     languageCode: string;
     snapshotTimestamp: string;
+    aggregateAverageRating?: number;
   }): Promise<GoogleShoppingRecentReviewsObservation> {
     if (!this.config.apiLogin || !this.config.apiPassword) {
       throw new ReviewProviderError("DataForSEO credentials are missing");
@@ -831,6 +935,7 @@ export class DataForSeoGoogleShoppingReviewsClient implements GoogleShoppingRece
           windowDays: this.config.recentReviewsWindowDays,
           minimumScoringSampleSize: this.config.recentReviewsMinimumScoringSampleSize,
           provisionalSampleSize: this.config.recentReviewsProvisionalSampleSize,
+          aggregateAverageRating: input.aggregateAverageRating,
           endpoint: DATAFORSEO_GOOGLE_SHOPPING_REVIEWS_TASK_GET_ADVANCED_PATH_PREFIX,
         });
       } catch (error) {

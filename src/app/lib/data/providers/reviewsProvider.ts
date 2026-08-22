@@ -90,20 +90,22 @@ export const mockReviewsProvider: TrendSignalProvider = {
           mode: "mock",
           provider,
           providerLabel: label,
-          providerMetric: "verifiedPurchaseShare",
+          providerMetric: "ratingConsensusQuality",
         },
-        value: reviews.verifiedPurchasePercent,
-        // Verified-purchase share below 30% is fragile; 95%+ is excellent and
-        // capped for the mock provider layer.
-        normalizedValue: normalize(normalizeLinear(reviews.verifiedPurchasePercent, 30, 95)),
+        value: reviews.ratingConsensusQuality,
+        // Fallback ratingConsensusQuality is already normalized to 0-100 under
+        // the distribution-adjusted consensus semantics.
+        normalizedValue: normalize(reviews.ratingConsensusQuality),
         sampleSize: reviews.ratingEvidenceCount,
         timestamp: DATA_LAYER_TIMESTAMP,
         confidence: 88,
         metadata: {
           provider,
-          providerMetric: "verifiedPurchaseShare",
-          engineField: "verifiedPurchasePercent",
-          engineValue: reviews.verifiedPurchasePercent,
+          providerMetric: "ratingConsensusQuality",
+          distributionScope: "fallback",
+          distributionComposition: "fallback_numeric_equivalent",
+          engineField: "ratingConsensusQuality",
+          engineValue: reviews.ratingConsensusQuality,
         },
       },
       {
@@ -316,6 +318,7 @@ export class ReviewQualitySignalProvider implements AsyncTrendSignalProvider {
         locationCode: this.config.locationCode,
         languageCode: this.config.languageCode,
         snapshotTimestamp: this.config.now().toISOString(),
+        aggregateAverageRating: input.observation.averageRating,
       });
     } catch {
       return undefined;

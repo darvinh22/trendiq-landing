@@ -9,6 +9,7 @@ import type {
 const REVIEW_AVERAGE_RATING_CONFIDENCE = 92;
 const REVIEW_RATING_EVIDENCE_CONFIDENCE = 91;
 const REVIEW_RECENT_AVERAGE_RATING_CONFIDENCE = 89;
+const REVIEW_RATING_CONSENSUS_QUALITY_CONFIDENCE = 87;
 
 function optionalString(value: string | undefined): string | undefined {
   return value && value.length ? value : undefined;
@@ -27,6 +28,7 @@ function ratingEvidenceMetadata(observation: GoogleShoppingReviewObservation) {
 
 function recentAverageRatingMetadata(recentReviews: GoogleShoppingRecentReviewsObservation | undefined) {
   if (!recentReviews) return {};
+  const consensus = recentReviews.ratingConsensus;
 
   return {
     recentAverageRatingStatus: recentReviews.status,
@@ -53,6 +55,28 @@ function recentAverageRatingMetadata(recentReviews: GoogleShoppingRecentReviewsO
     recentReviewsProviderGid: recentReviews.identifiers.gid,
     recentReviewsProviderProductId: optionalString(recentReviews.identifiers.productId),
     recentReviewsProviderDataDocid: optionalString(recentReviews.identifiers.dataDocid),
+    ratingConsensusQualityStatus: consensus?.status,
+    ratingConsensusQualityComputed: consensus?.ratingConsensusQuality,
+    provisionalRatingConsensusQuality: consensus?.provisionalRatingConsensusQuality,
+    ratingConsensusQualityCalculationMethod: consensus?.calculationMethod,
+    ratingConsensusQualityObservationCount: consensus?.totalDistributionCount,
+    ratingConsensusDistributionSource: consensus?.distributionSource,
+    ratingConsensusDistributionScope: consensus?.distributionScope,
+    ratingConsensusDistributionComposition: consensus?.distributionComposition,
+    ratingConsensusStar1Count: consensus?.star1Count,
+    ratingConsensusStar2Count: consensus?.star2Count,
+    ratingConsensusStar3Count: consensus?.star3Count,
+    ratingConsensusStar4Count: consensus?.star4Count,
+    ratingConsensusStar5Count: consensus?.star5Count,
+    ratingConsensusMean: consensus?.mean,
+    ratingConsensusStandardDeviation: consensus?.standardDeviation,
+    ratingConsensusVariance: consensus?.variance,
+    ratingConsensusQualityGate: consensus?.qualityGate,
+    ratingConsensusShapeSupport: consensus?.shapeSupport,
+    ratingConsensusLowTailPenalty: consensus?.lowTailPenalty,
+    ratingConsensusAggregateAverageRating: consensus?.aggregateAverageRating,
+    ratingConsensusAggregateRatingDelta: consensus?.aggregateRatingDelta,
+    ratingConsensusAggregateRatingMismatchThreshold: consensus?.aggregateRatingMismatchThreshold,
   };
 }
 
@@ -179,6 +203,46 @@ export function buildReviewQualitySignalsFromObservation(input: {
         confidence: REVIEW_RECENT_AVERAGE_RATING_CONFIDENCE,
         engineField: "recentAverageRating",
         engineValue: input.recentReviews.recentAverageRating,
+      },
+    });
+  }
+
+  if (typeof input.recentReviews?.ratingConsensus?.ratingConsensusQuality === "number") {
+    const consensus = input.recentReviews.ratingConsensus;
+
+    signals.push({
+      source: "reviews",
+      signalType: "reviewQuality",
+      productId: input.productId,
+      sourceProvenance: {
+        mode: "derived-live",
+        provider: "dataforseo_google_shopping_reviews",
+        providerLabel: "DataForSEO Google Shopping Reviews",
+        providerMetric: "ratingConsensusQuality",
+        approvalStatus: "not-required",
+        liveApiRequestMade: true,
+        notes: "ratingConsensusQuality is computed from the live Google Shopping rating distribution using the Phase 3I distribution-adjusted consensus formula.",
+      },
+      value: consensus.ratingConsensusQuality,
+      normalizedValue: roundTo(consensus.ratingConsensusQuality, 2),
+      sampleSize: consensus.totalDistributionCount,
+      timestamp: input.recentReviews.fetchedAt,
+      confidence: REVIEW_RATING_CONSENSUS_QUALITY_CONFIDENCE,
+      metadata: {
+        ...commonMetadata,
+        provider: "dataforseo_google_shopping_reviews",
+        providerMetric: "ratingConsensusQuality",
+        sourceName: "DataForSEO Google Shopping Reviews API",
+        sourceMetric: consensus.distributionSource === "provider_rating_groups"
+          ? "rating_groups[].rating_count_or_votes_count"
+          : "items[].rating.value",
+        sourceEndpoint: input.recentReviews.endpoint,
+        sourceTimestamp: input.recentReviews.fetchedAt,
+        sourceDatetime: input.recentReviews.sourceDatetime,
+        sourceCost: input.recentReviews.cost,
+        confidence: REVIEW_RATING_CONSENSUS_QUALITY_CONFIDENCE,
+        engineField: "ratingConsensusQuality",
+        engineValue: consensus.ratingConsensusQuality,
       },
     });
   }

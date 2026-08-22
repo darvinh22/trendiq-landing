@@ -23,7 +23,7 @@ const completeHighSignal: TrendIQSignalInputs = {
   reviewQuality: {
     averageRating: 4.8,
     ratingEvidenceCount: 20000,
-    verifiedPurchasePercent: 95,
+    ratingConsensusQuality: 100,
     recentAverageRating: 4.8,
   },
   purchaseIntent: {
@@ -83,6 +83,20 @@ describe("scoreEngine", () => {
       expect(components[key]).toBeGreaterThanOrEqual(0);
       expect(components[key]).toBeLessThanOrEqual(100);
     }
+  });
+
+  it("uses ratingConsensusQuality directly without legacy percentage normalization", () => {
+    const components = calculateScoreComponents({
+      ...completeHighSignal,
+      reviewQuality: {
+        averageRating: 3.2,
+        ratingEvidenceCount: 20,
+        ratingConsensusQuality: 80,
+        recentAverageRating: 3,
+      },
+    });
+
+    expect(components.reviewQuality).toBe(12);
   });
 
   it("calculates a deterministic versioned score", () => {

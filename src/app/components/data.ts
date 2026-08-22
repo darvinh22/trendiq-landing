@@ -441,7 +441,7 @@ const MOCK_SIGNAL_INPUTS: Record<string, TrendIQSignalInputs> = {
     reviewQuality: {
       averageRating: 4.4,
       ratingEvidenceCount: 2900,
-      verifiedPurchasePercent: 85,
+      ratingConsensusQuality: 85,
       recentAverageRating: 4.3,
     },
     purchaseIntent: {
@@ -490,7 +490,7 @@ const MOCK_SIGNAL_INPUTS: Record<string, TrendIQSignalInputs> = {
     reviewQuality: {
       averageRating: 4.2,
       ratingEvidenceCount: 1500,
-      verifiedPurchasePercent: 78,
+      ratingConsensusQuality: 78,
       recentAverageRating: 4,
     },
     purchaseIntent: {
@@ -539,7 +539,7 @@ const MOCK_SIGNAL_INPUTS: Record<string, TrendIQSignalInputs> = {
     reviewQuality: {
       averageRating: 4.5,
       ratingEvidenceCount: 5200,
-      verifiedPurchasePercent: 88,
+      ratingConsensusQuality: 88,
       recentAverageRating: 4.4,
     },
     purchaseIntent: {
@@ -588,7 +588,7 @@ const MOCK_SIGNAL_INPUTS: Record<string, TrendIQSignalInputs> = {
     reviewQuality: {
       averageRating: 4.6,
       ratingEvidenceCount: 9600,
-      verifiedPurchasePercent: 90,
+      ratingConsensusQuality: 90,
       recentAverageRating: 4.55,
     },
     purchaseIntent: {
@@ -637,7 +637,7 @@ const MOCK_SIGNAL_INPUTS: Record<string, TrendIQSignalInputs> = {
     reviewQuality: {
       averageRating: 4.85,
       ratingEvidenceCount: 10500,
-      verifiedPurchasePercent: 92,
+      ratingConsensusQuality: 92,
       recentAverageRating: 4.82,
     },
     purchaseIntent: {
@@ -686,7 +686,7 @@ const MOCK_SIGNAL_INPUTS: Record<string, TrendIQSignalInputs> = {
     reviewQuality: {
       averageRating: 4.7,
       ratingEvidenceCount: 18000,
-      verifiedPurchasePercent: 72,
+      ratingConsensusQuality: 72,
       recentAverageRating: 4.75,
     },
     purchaseIntent: {
@@ -735,7 +735,7 @@ const MOCK_SIGNAL_INPUTS: Record<string, TrendIQSignalInputs> = {
     reviewQuality: {
       averageRating: 4.55,
       ratingEvidenceCount: 25000,
-      verifiedPurchasePercent: 86,
+      ratingConsensusQuality: 86,
       recentAverageRating: 4.5,
     },
     purchaseIntent: {
@@ -784,7 +784,7 @@ const MOCK_SIGNAL_INPUTS: Record<string, TrendIQSignalInputs> = {
     reviewQuality: {
       averageRating: 4.78,
       ratingEvidenceCount: 12500,
-      verifiedPurchasePercent: 91,
+      ratingConsensusQuality: 91,
       recentAverageRating: 4.74,
     },
     purchaseIntent: {

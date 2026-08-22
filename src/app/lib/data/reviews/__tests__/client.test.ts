@@ -47,7 +47,11 @@ function productsResponse(items: unknown[]) {
   };
 }
 
-function shoppingReviewsResponse(items: unknown[], reviewsCount = items.length) {
+function shoppingReviewsResponse(
+  items: unknown[],
+  reviewsCount = items.length,
+  resultOverrides: Record<string, unknown> = {}
+) {
   return {
     status_code: 20000,
     status_message: "Ok.",
@@ -65,6 +69,7 @@ function shoppingReviewsResponse(items: unknown[], reviewsCount = items.length) 
             reviews_count: reviewsCount,
             items_count: items.length,
             items,
+            ...resultOverrides,
           },
         ],
       },
@@ -303,6 +308,131 @@ describe("DataForSEO Google Shopping review mapping", () => {
     expect(observation.windowEnd).toBe("2026-08-21T00:00:00.000Z");
     expect(observation.sourceDomains).toEqual(["example.com"]);
     expect(observation.datePrecision).toBe("provider_observed_approximate_relative_timestamp");
+  });
+
+  it("computes derived-live ratingConsensusQuality from the Ray-Ban 200-review sample distribution", () => {
+    const observation = mapDataForSeoGoogleShoppingReviewsResponse({
+      response: shoppingReviewsResponse([
+        ...repeatedReviewItems(2, 3, "2026-06-22 02:18:56 +00:00"),
+        ...repeatedReviewItems(32, 4, "2026-08-01 02:18:56 +00:00"),
+        ...repeatedReviewItems(166, 4, "2026-05-13 00:00:00 +00:00"),
+      ], 200),
+      productId: "ray-ban-meta",
+      identifiers: {
+        gid: "11193998885220934472",
+        productId: "11716803554991446550",
+        dataDocid: "4690297997048968068",
+      },
+      locationCode: 2840,
+      languageCode: "en",
+      fetchedAt: now.toISOString(),
+      snapshotTimestamp: "2026-08-12T00:00:00.000Z",
+      windowDays: 90,
+      minimumScoringSampleSize: 30,
+      provisionalSampleSize: 10,
+      aggregateAverageRating: 4.4,
+    });
+
+    expect(observation.status).toBe("derived-live");
+    expect(observation.recentAverageRating).toBe(3.94);
+    expect(observation.qualifyingReviewCount).toBe(34);
+    expect(observation.outsideWindowReviewCount).toBe(166);
+    expect(observation.ratingConsensus?.status).toBe("derived-live");
+    expect(observation.ratingConsensus?.distributionSource).toBe("review_items");
+    expect(observation.ratingConsensus?.distributionScope).toBe("fetched_review_sample");
+    expect(observation.ratingConsensus?.totalDistributionCount).toBe(200);
+    expect(observation.ratingConsensus?.star3Count).toBe(2);
+    expect(observation.ratingConsensus?.star4Count).toBe(198);
+    expect(observation.ratingConsensus?.mean).toBe(3.99);
+    expect(observation.ratingConsensus?.aggregateRatingDelta).toBe(0.41);
+    expect(observation.ratingConsensus?.ratingConsensusQuality).toBeCloseTo(77.9, 1);
+  });
+
+  it("keeps 30-99 rating observations provisional for ratingConsensusQuality", () => {
+    const observation = mapDataForSeoGoogleShoppingReviewsResponse({
+      response: shoppingReviewsResponse(repeatedReviewItems(99, 4), 99),
+      productId: "ray-ban-meta",
+      identifiers: { gid: "11193998885220934472" },
+      locationCode: 2840,
+      languageCode: "en",
+      fetchedAt: now.toISOString(),
+      snapshotTimestamp: "2026-08-21T00:00:00.000Z",
+      windowDays: 90,
+      minimumScoringSampleSize: 30,
+      provisionalSampleSize: 10,
+      aggregateAverageRating: 4,
+    });
+
+    expect(observation.ratingConsensus?.status).toBe("provisional");
+    expect(observation.ratingConsensus?.ratingConsensusQuality).toBeUndefined();
+    expect(observation.ratingConsensus?.provisionalRatingConsensusQuality).toBeDefined();
+  });
+
+  it("keeps fewer than 30 rating observations insufficient for ratingConsensusQuality", () => {
+    const observation = mapDataForSeoGoogleShoppingReviewsResponse({
+      response: shoppingReviewsResponse(repeatedReviewItems(29, 4), 29),
+      productId: "ray-ban-meta",
+      identifiers: { gid: "11193998885220934472" },
+      locationCode: 2840,
+      languageCode: "en",
+      fetchedAt: now.toISOString(),
+      snapshotTimestamp: "2026-08-21T00:00:00.000Z",
+      windowDays: 90,
+      minimumScoringSampleSize: 30,
+      provisionalSampleSize: 10,
+      aggregateAverageRating: 4,
+    });
+
+    expect(observation.ratingConsensus?.status).toBe("insufficient");
+    expect(observation.ratingConsensus?.ratingConsensusQuality).toBeUndefined();
+  });
+
+  it("falls back when sampled ratingConsensusQuality conflicts with aggregate averageRating", () => {
+    const observation = mapDataForSeoGoogleShoppingReviewsResponse({
+      response: shoppingReviewsResponse(repeatedReviewItems(100, 5), 100),
+      productId: "ray-ban-meta",
+      identifiers: { gid: "11193998885220934472" },
+      locationCode: 2840,
+      languageCode: "en",
+      fetchedAt: now.toISOString(),
+      snapshotTimestamp: "2026-08-21T00:00:00.000Z",
+      windowDays: 90,
+      minimumScoringSampleSize: 30,
+      provisionalSampleSize: 10,
+      aggregateAverageRating: 3.9,
+    });
+
+    expect(observation.ratingConsensus?.status).toBe("mismatch");
+    expect(observation.ratingConsensus?.ratingConsensusQuality).toBeUndefined();
+    expect(observation.ratingConsensus?.aggregateRatingDelta).toBe(1.1);
+  });
+
+  it("prefers full provider rating groups over sampled review-item ratings", () => {
+    const observation = mapDataForSeoGoogleShoppingReviewsResponse({
+      response: shoppingReviewsResponse(repeatedReviewItems(200, 1), 120, {
+        rating_groups: [
+          { value: 5, rating_max: 5, rating_count: 120 },
+        ],
+      }),
+      productId: "ray-ban-meta",
+      identifiers: { gid: "11193998885220934472" },
+      locationCode: 2840,
+      languageCode: "en",
+      fetchedAt: now.toISOString(),
+      snapshotTimestamp: "2026-08-21T00:00:00.000Z",
+      windowDays: 90,
+      minimumScoringSampleSize: 30,
+      provisionalSampleSize: 10,
+      aggregateAverageRating: 3.9,
+    });
+
+    expect(observation.ratingConsensus?.status).toBe("derived-live");
+    expect(observation.ratingConsensus?.distributionSource).toBe("provider_rating_groups");
+    expect(observation.ratingConsensus?.distributionScope).toBe("full_provider_distribution");
+    expect(observation.ratingConsensus?.totalDistributionCount).toBe(120);
+    expect(observation.ratingConsensus?.star1Count).toBe(0);
+    expect(observation.ratingConsensus?.star5Count).toBe(120);
+    expect(observation.ratingConsensus?.ratingConsensusQuality).toBeGreaterThan(90);
   });
 
   it("keeps 10-29 qualifying reviews provisional instead of scoring-ready", () => {

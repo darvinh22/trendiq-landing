@@ -21,7 +21,7 @@ const baseSignals: TrendIQSignalInputs = {
   reviewQuality: {
     averageRating: 4.4,
     ratingEvidenceCount: 1000,
-    verifiedPurchasePercent: 80,
+    ratingConsensusQuality: 80,
     recentAverageRating: 4.3,
   },
   purchaseIntent: {

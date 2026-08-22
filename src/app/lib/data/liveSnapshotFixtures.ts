@@ -302,6 +302,7 @@ export function buildValidatedRayBanMetaLiveSnapshot(): ProductTrendSnapshot {
     windowDays: reviewConfig.recentReviewsWindowDays,
     minimumScoringSampleSize: reviewConfig.recentReviewsMinimumScoringSampleSize,
     provisionalSampleSize: reviewConfig.recentReviewsProvisionalSampleSize,
+    aggregateAverageRating: reviewObservation.averageRating,
     endpoint: DATAFORSEO_GOOGLE_SHOPPING_REVIEWS_TASK_GET_ADVANCED_PATH_PREFIX,
   });
   const liveReviewSignals = buildReviewQualitySignalsFromObservation({

@@ -25,7 +25,7 @@ export const RAY_BAN_META_SIGNAL_INPUTS: TrendIQSignalInputs = {
   reviewQuality: {
     averageRating: 4.4,
     ratingEvidenceCount: 2900,
-    verifiedPurchasePercent: 85,
+    ratingConsensusQuality: 85,
     recentAverageRating: 4.3,
   },
   purchaseIntent: {

@@ -118,6 +118,38 @@ export interface GoogleShoppingReviewItemObservation {
 
 export type RecentAverageRatingStatus = "derived-live" | "provisional" | "insufficient";
 
+export type RatingDistributionSource = "provider_rating_groups" | "review_items";
+export type RatingDistributionScope = "full_provider_distribution" | "fetched_review_sample";
+export type RatingConsensusQualityStatus = "derived-live" | "provisional" | "insufficient" | "mismatch";
+
+export interface RatingDistributionInput {
+  star1Count: number;
+  star2Count: number;
+  star3Count: number;
+  star4Count: number;
+  star5Count: number;
+  distributionSource: RatingDistributionSource;
+  distributionScope: RatingDistributionScope;
+  distributionComposition: string;
+}
+
+export interface RatingConsensusQualityResult extends RatingDistributionInput {
+  totalDistributionCount: number;
+  mean: number;
+  standardDeviation: number;
+  variance: number;
+  qualityGate: number;
+  shapeSupport: number;
+  lowTailPenalty: number;
+  status: RatingConsensusQualityStatus;
+  ratingConsensusQuality?: number;
+  provisionalRatingConsensusQuality?: number;
+  aggregateAverageRating?: number;
+  aggregateRatingDelta?: number;
+  aggregateRatingMismatchThreshold?: number;
+  calculationMethod: string;
+}
+
 export interface GoogleShoppingRecentReviewsObservation {
   provider: ReviewProviderVendor;
   productId: string;
@@ -144,6 +176,7 @@ export interface GoogleShoppingRecentReviewsObservation {
   totalReviewsAvailable?: number;
   sourceDomains: string[];
   reviews: GoogleShoppingReviewItemObservation[];
+  ratingConsensus?: RatingConsensusQualityResult;
   calculationMethod: string;
   datePrecision: string;
   cost?: number;
@@ -157,6 +190,7 @@ export interface GoogleShoppingRecentReviewsClient {
     locationCode: number;
     languageCode: string;
     snapshotTimestamp: string;
+    aggregateAverageRating?: number;
   }): Promise<GoogleShoppingRecentReviewsObservation>;
 }
 

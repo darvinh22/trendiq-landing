@@ -83,8 +83,11 @@ describe("live data audit", () => {
     const recentAverageRatingField = reviewComponent?.fields.find((field) =>
       field.engineField === "recentAverageRating"
     );
+    const ratingConsensusQualityField = reviewComponent?.fields.find((field) =>
+      field.engineField === "ratingConsensusQuality"
+    );
 
-    expect(VALIDATED_RAY_BAN_META_LIVE_SNAPSHOT.trendIQScore.score).toBe(61);
+    expect(VALIDATED_RAY_BAN_META_LIVE_SNAPSHOT.trendIQScore.score).toBe(60);
     expect(VALIDATED_RAY_BAN_META_LIVE_SNAPSHOT.confidence.score).toBe(92);
     expect(VALIDATED_RAY_BAN_META_LIVE_SNAPSHOT.confidence.level).toBe("High");
     expect(VALIDATED_RAY_BAN_META_LIVE_SNAPSHOT.trendStatus).toEqual({
@@ -92,16 +95,19 @@ describe("live data audit", () => {
       status: "Cooling",
     });
     expect(VALIDATED_RAY_BAN_META_LIVE_SNAPSHOT.aggregatedSignals.reviewQuality.recentAverageRating).toBe(3.94);
-    expect(VALIDATED_RAY_BAN_META_LIVE_SNAPSHOT.trendIQScore.components.reviewQuality).toBe(70.29);
-    expect(reviewComponent?.weightedIQContribution).toBe(10.54);
+    expect(VALIDATED_RAY_BAN_META_LIVE_SNAPSHOT.aggregatedSignals.reviewQuality.ratingConsensusQuality).toBe(77.9);
+    expect(VALIDATED_RAY_BAN_META_LIVE_SNAPSHOT.trendIQScore.components.reviewQuality).toBe(69.29);
+    expect(reviewComponent?.weightedIQContribution).toBe(10.39);
     expect(recentAverageRatingField?.provenance).toBe("derived-live");
     expect(recentAverageRatingField?.liveBackedWeight).toBe(0.0225);
-    expect(audit?.liveCoveragePercent).toBe(34.8);
+    expect(ratingConsensusQualityField?.provenance).toBe("derived-live");
+    expect(ratingConsensusQualityField?.liveBackedWeight).toBe(0.0225);
+    expect(audit?.liveCoveragePercent).toBe(37);
     expect(audit?.liveCoveragePercent).toBeGreaterThan(0);
     expect(audit?.liveCoveragePercent).toBeLessThan(100);
     expect(audit?.liveComponents).toEqual(["searchMomentum", "reviewQuality", "growthVelocity"]);
     expect(audit?.mockFallbackComponents).toContain("searchMomentum");
-    expect(audit?.mockFallbackComponents).toContain("reviewQuality");
+    expect(audit?.mockFallbackComponents).not.toContain("reviewQuality");
     expect(audit?.mockFallbackComponents).not.toContain("growthVelocity");
     expect(audit?.mockFallbackComponents).toContain("sentiment");
     expect(audit?.weightedLiveIQContribution).toBeGreaterThan(0);
@@ -137,13 +143,16 @@ describe("live data audit", () => {
       .find((component) => component.component === "growthVelocity");
 
     expect(searchComponent?.provenance).toBe("derived-mixed");
-    expect(reviewComponent?.provenance).toBe("derived-mixed");
+    expect(reviewComponent?.provenance).toBe("derived-live");
     expect(reviewComponent?.fields.find((field) =>
       field.engineField === "averageRating"
     )?.provenance).toBe("live");
     expect(reviewComponent?.fields.find((field) =>
       field.engineField === "ratingEvidenceCount"
     )?.provenance).toBe("live");
+    expect(reviewComponent?.fields.find((field) =>
+      field.engineField === "ratingConsensusQuality"
+    )?.provenance).toBe("derived-live");
     expect(growthComponent?.provenance).toBe("derived-live");
     expect(growthComponent?.liveCoveragePercent).toBe(100);
     expect(growthComponent?.fields.find((field) =>

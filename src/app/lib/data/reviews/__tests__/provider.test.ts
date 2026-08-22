@@ -9,6 +9,7 @@ import type {
   GoogleShoppingRecentReviewsObservation,
   GoogleShoppingReviewsClient,
   GoogleShoppingReviewObservation,
+  RatingConsensusQualityResult,
 } from "../types";
 import { readReviewProviderConfig } from "../config";
 import {
@@ -83,6 +84,35 @@ function recentReviewsObservation(
     reviews: [],
     calculationMethod: "mean_rating_of_dated_reviews_in_trailing_90_days",
     datePrecision: "provider_observed_approximate_relative_timestamp",
+    ...overrides,
+  };
+}
+
+function ratingConsensus(
+  overrides: Partial<RatingConsensusQualityResult> = {}
+): RatingConsensusQualityResult {
+  return {
+    star1Count: 0,
+    star2Count: 0,
+    star3Count: 2,
+    star4Count: 198,
+    star5Count: 0,
+    totalDistributionCount: 200,
+    mean: 3.99,
+    standardDeviation: 0.0995,
+    variance: 0.0099,
+    qualityGate: 79.33,
+    shapeSupport: 98.26,
+    lowTailPenalty: 0.06,
+    status: "derived-live",
+    ratingConsensusQuality: 77.9,
+    aggregateAverageRating: 4.4,
+    aggregateRatingDelta: 0.41,
+    aggregateRatingMismatchThreshold: 0.75,
+    distributionSource: "review_items",
+    distributionScope: "fetched_review_sample",
+    distributionComposition: "valid_ratings_from_fetched_review_items",
+    calculationMethod: "distribution_adjusted_rating_consensus_quality_v1",
     ...overrides,
   };
 }
@@ -189,7 +219,7 @@ describe("ReviewQualitySignalProvider", () => {
     expect(byEngineField.get("ratingEvidenceCount")?.metadata?.ratingEvidenceSourceField)
       .toBe("product_rating.votes_count");
     expect(byEngineField.get("ratingEvidenceCount")?.metadata?.ratingEvidenceComposition).toBe("rating_votes_only");
-    expect(byEngineField.get("verifiedPurchasePercent")?.sourceProvenance.mode).toBe("fallback");
+    expect(byEngineField.get("ratingConsensusQuality")?.sourceProvenance.mode).toBe("fallback");
     expect(byEngineField.get("recentAverageRating")?.sourceProvenance.mode).toBe("fallback");
     expect(recentReviewsClient.calls[0]).toEqual({
       productId: RAY_BAN_META_PRODUCT_ID,
@@ -223,6 +253,97 @@ describe("ReviewQualitySignalProvider", () => {
       .toBe("provider_observed_approximate_relative_timestamp");
     expect(recentAverageRating?.metadata?.recentReviewSourceDomains).toBe("example.com");
     expect(recentReviewsClient.calls[0]?.snapshotTimestamp).toBe(now.toISOString());
+  });
+
+  it("uses derived-live ratingConsensusQuality when distribution observations meet the scoring guardrail", async () => {
+    const client = new FixtureReviewClient(observation());
+    const recentReviewsClient = new FixtureRecentReviewsClient(recentReviewsObservation({
+      ratingConsensus: ratingConsensus(),
+    }));
+    const provider = new ReviewQualitySignalProvider(liveConfig(), { client, recentReviewsClient });
+    const signals = await provider.getSignalsAsync(RAY_BAN_META_PRODUCT_ID);
+    const byEngineField = new Map(signals.map((signal) => [signal.metadata?.engineField, signal]));
+    const ratingConsensusQuality = byEngineField.get("ratingConsensusQuality");
+
+    expect(ratingConsensusQuality?.value).toBe(77.9);
+    expect(ratingConsensusQuality?.normalizedValue).toBe(77.9);
+    expect(ratingConsensusQuality?.sourceProvenance.mode).toBe("derived-live");
+    expect(ratingConsensusQuality?.sourceProvenance.provider).toBe("dataforseo_google_shopping_reviews");
+    expect(ratingConsensusQuality?.metadata?.provider).toBe("dataforseo_google_shopping_reviews");
+    expect(ratingConsensusQuality?.metadata?.sourceMetric).toBe("items[].rating.value");
+    expect(ratingConsensusQuality?.metadata?.ratingConsensusQualityStatus).toBe("derived-live");
+    expect(ratingConsensusQuality?.metadata?.ratingConsensusQualityObservationCount).toBe(200);
+    expect(ratingConsensusQuality?.metadata?.ratingConsensusStar3Count).toBe(2);
+    expect(ratingConsensusQuality?.metadata?.ratingConsensusStar4Count).toBe(198);
+    expect(ratingConsensusQuality?.metadata?.ratingConsensusDistributionScope).toBe("fetched_review_sample");
+    expect(ratingConsensusQuality?.metadata?.ratingConsensusAggregateRatingDelta).toBe(0.41);
+  });
+
+  it("keeps 30-99 ratingConsensusQuality observations provisional without replacing scoring fallback", async () => {
+    const client = new FixtureReviewClient(observation());
+    const recentReviewsClient = new FixtureRecentReviewsClient(recentReviewsObservation({
+      ratingConsensus: ratingConsensus({
+        totalDistributionCount: 99,
+        star4Count: 99,
+        star3Count: 0,
+        status: "provisional",
+        ratingConsensusQuality: undefined,
+        provisionalRatingConsensusQuality: 80,
+      }),
+    }));
+    const provider = new ReviewQualitySignalProvider(liveConfig(), { client, recentReviewsClient });
+    const signals = await provider.getSignalsAsync(RAY_BAN_META_PRODUCT_ID);
+    const byEngineField = new Map(signals.map((signal) => [signal.metadata?.engineField, signal]));
+
+    expect(byEngineField.get("averageRating")?.metadata?.ratingConsensusQualityStatus).toBe("provisional");
+    expect(byEngineField.get("averageRating")?.metadata?.provisionalRatingConsensusQuality).toBe(80);
+    expect(byEngineField.get("ratingConsensusQuality")?.value).toBe(85);
+    expect(byEngineField.get("ratingConsensusQuality")?.sourceProvenance.mode).toBe("fallback");
+  });
+
+  it("keeps ratingConsensusQuality fallback below the provisional floor", async () => {
+    const client = new FixtureReviewClient(observation());
+    const recentReviewsClient = new FixtureRecentReviewsClient(recentReviewsObservation({
+      ratingConsensus: ratingConsensus({
+        totalDistributionCount: 29,
+        star4Count: 29,
+        star3Count: 0,
+        status: "insufficient",
+        ratingConsensusQuality: undefined,
+      }),
+    }));
+    const provider = new ReviewQualitySignalProvider(liveConfig(), { client, recentReviewsClient });
+    const signals = await provider.getSignalsAsync(RAY_BAN_META_PRODUCT_ID);
+    const byEngineField = new Map(signals.map((signal) => [signal.metadata?.engineField, signal]));
+
+    expect(byEngineField.get("averageRating")?.metadata?.ratingConsensusQualityStatus).toBe("insufficient");
+    expect(byEngineField.get("ratingConsensusQuality")?.value).toBe(85);
+    expect(byEngineField.get("ratingConsensusQuality")?.sourceProvenance.mode).toBe("fallback");
+  });
+
+  it("keeps ratingConsensusQuality fallback when the sampled distribution mismatches aggregate averageRating", async () => {
+    const client = new FixtureReviewClient(observation());
+    const recentReviewsClient = new FixtureRecentReviewsClient(recentReviewsObservation({
+      ratingConsensus: ratingConsensus({
+        totalDistributionCount: 100,
+        star3Count: 0,
+        star4Count: 0,
+        star5Count: 100,
+        mean: 5,
+        status: "mismatch",
+        ratingConsensusQuality: undefined,
+        aggregateAverageRating: 3.9,
+        aggregateRatingDelta: 1.1,
+      }),
+    }));
+    const provider = new ReviewQualitySignalProvider(liveConfig(), { client, recentReviewsClient });
+    const signals = await provider.getSignalsAsync(RAY_BAN_META_PRODUCT_ID);
+    const byEngineField = new Map(signals.map((signal) => [signal.metadata?.engineField, signal]));
+
+    expect(byEngineField.get("averageRating")?.metadata?.ratingConsensusQualityStatus).toBe("mismatch");
+    expect(byEngineField.get("averageRating")?.metadata?.ratingConsensusAggregateRatingDelta).toBe(1.1);
+    expect(byEngineField.get("ratingConsensusQuality")?.value).toBe(85);
+    expect(byEngineField.get("ratingConsensusQuality")?.sourceProvenance.mode).toBe("fallback");
   });
 
   it("keeps 10-29 recent reviews as provisional metadata without replacing the scoring fallback", async () => {
@@ -369,8 +490,8 @@ describe("ReviewQualitySignalProvider", () => {
       mockSnapshot.aggregatedSignals.reviewQuality.averageRating
     );
     expect(snapshot.aggregatedSignals.reviewQuality.ratingEvidenceCount).toBe(1700);
-    expect(snapshot.aggregatedSignals.reviewQuality.verifiedPurchasePercent).toBe(
-      mockSnapshot.aggregatedSignals.reviewQuality.verifiedPurchasePercent
+    expect(snapshot.aggregatedSignals.reviewQuality.ratingConsensusQuality).toBe(
+      mockSnapshot.aggregatedSignals.reviewQuality.ratingConsensusQuality
     );
     expect(snapshot.aggregatedSignals.reviewQuality.recentAverageRating).toBe(
       mockSnapshot.aggregatedSignals.reviewQuality.recentAverageRating
@@ -408,8 +529,8 @@ describe("ReviewQualitySignalProvider", () => {
     );
     expect(snapshot.aggregatedSignals.reviewQuality.ratingEvidenceCount).toBe(1700);
     expect(snapshot.aggregatedSignals.reviewQuality.recentAverageRating).toBe(4.5);
-    expect(snapshot.aggregatedSignals.reviewQuality.verifiedPurchasePercent).toBe(
-      mockSnapshot.aggregatedSignals.reviewQuality.verifiedPurchasePercent
+    expect(snapshot.aggregatedSignals.reviewQuality.ratingConsensusQuality).toBe(
+      mockSnapshot.aggregatedSignals.reviewQuality.ratingConsensusQuality
     );
     expect(score.scoreVersion).toBe(mockSnapshot.trendIQScore.scoreVersion);
     expect(reviewComponent?.fields.find((field) =>

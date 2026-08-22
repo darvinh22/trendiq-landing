@@ -90,8 +90,9 @@ export function calculateScoreComponents(input: TrendIQSignalInputs): TrendIQSco
     // rises quickly at first, then tapers once the rating is well-supported.
     { score: normalizeLogScale(input.reviewQuality.ratingEvidenceCount, 20, 20000), weight: 0.25 },
 
-    // Verified-purchase share below 30% is weak; 95%+ is capped as excellent.
-    { score: normalizeLinear(input.reviewQuality.verifiedPurchasePercent, 30, 95), weight: 0.15 },
+    // Rating consensus quality is already a normalized 0-100 distribution
+    // quality score, so this slot applies it directly.
+    { score: input.reviewQuality.ratingConsensusQuality, weight: 0.15 },
 
     // Recent rating guards against stale historical love hiding current issues.
     { score: normalizeLinear(input.reviewQuality.recentAverageRating, 3.0, 4.8), weight: 0.15 },
