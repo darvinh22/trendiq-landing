@@ -35,6 +35,10 @@ export interface ReviewProviderConfig {
   taskDepth: number;
   taskPollAttempts: number;
   taskPollIntervalMs: number;
+  recentReviewsDepth: number;
+  recentReviewsWindowDays: number;
+  recentReviewsMinimumScoringSampleSize: number;
+  recentReviewsProvisionalSampleSize: number;
   minimumMatchConfidence: ProductMatchConfidence;
   productIdentities: Record<string, ReviewProductIdentityConfig>;
   now: () => Date;
@@ -102,7 +106,62 @@ export interface GoogleShoppingReviewsClient {
   }): Promise<GoogleShoppingReviewObservation>;
 }
 
+export interface GoogleShoppingReviewItemObservation {
+  rating: number;
+  publicationDate: string;
+  rawPublicationDate?: string;
+  providedBy?: string;
+  url?: string;
+  rankGroup?: number;
+  rankAbsolute?: number;
+}
+
+export type RecentAverageRatingStatus = "derived-live" | "provisional" | "insufficient";
+
+export interface GoogleShoppingRecentReviewsObservation {
+  provider: ReviewProviderVendor;
+  productId: string;
+  identifiers: GoogleShoppingProductIdentifier;
+  locationCode: number;
+  languageCode: string;
+  fetchedAt: string;
+  sourceDatetime?: string;
+  endpoint: string;
+  snapshotTimestamp: string;
+  windowStart: string;
+  windowEnd: string;
+  windowDays: number;
+  status: RecentAverageRatingStatus;
+  recentAverageRating?: number;
+  provisionalRecentAverageRating?: number;
+  totalReviewsFetched: number;
+  datedReviewCount: number;
+  qualifyingReviewCount: number;
+  excludedReviewCount: number;
+  undatedReviewCount: number;
+  invalidRatingCount: number;
+  outsideWindowReviewCount: number;
+  totalReviewsAvailable?: number;
+  sourceDomains: string[];
+  reviews: GoogleShoppingReviewItemObservation[];
+  calculationMethod: string;
+  datePrecision: string;
+  cost?: number;
+}
+
+export interface GoogleShoppingRecentReviewsClient {
+  getRecentProductReviews(input: {
+    productId: string;
+    identity: ReviewProductIdentityConfig;
+    identifiers?: GoogleShoppingProductIdentifier;
+    locationCode: number;
+    languageCode: string;
+    snapshotTimestamp: string;
+  }): Promise<GoogleShoppingRecentReviewsObservation>;
+}
+
 export interface ReviewSignalBuildResult {
   signals: NormalizedTrendSignal[];
   observation: GoogleShoppingReviewObservation;
+  recentReviews?: GoogleShoppingRecentReviewsObservation;
 }

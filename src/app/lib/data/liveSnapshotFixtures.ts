@@ -10,7 +10,9 @@ import { aggregateSignals } from "./signalAggregator";
 import { buildTrendIQSnapshotProvenanceSummary } from "./liveDataAudit";
 import {
   DATAFORSEO_GOOGLE_SHOPPING_PRODUCTS_TASK_GET_ADVANCED_PATH_PREFIX,
+  DATAFORSEO_GOOGLE_SHOPPING_REVIEWS_TASK_GET_ADVANCED_PATH_PREFIX,
   mapDataForSeoGoogleShoppingProductsResponse,
+  mapDataForSeoGoogleShoppingReviewsResponse,
 } from "./reviews/client";
 import { readReviewProviderConfig } from "./reviews/config";
 import { buildReviewQualitySignalsFromObservation } from "./reviews/signalBuilder";
@@ -169,6 +171,68 @@ export const VALIDATED_RAY_BAN_META_DATAFORSEO_GOOGLE_SHOPPING_PRODUCTS_RESPONSE
   ],
 } as const;
 
+const VALIDATED_RAY_BAN_META_RECENT_REVIEW_GROUPS = [
+  { rating: 3, count: 2, publicationDate: "2026-06-22 02:18:56 +00:00", providedBy: "Target" },
+  { rating: 4, count: 4, publicationDate: "2026-08-01 02:18:56 +00:00", providedBy: "argos.co.uk" },
+  { rating: 4, count: 4, publicationDate: "2026-08-01 02:18:56 +00:00", providedBy: "bestbuy.ca" },
+  { rating: 4, count: 4, publicationDate: "2026-08-01 02:18:56 +00:00", providedBy: "bestbuy.com" },
+  { rating: 4, count: 4, publicationDate: "2026-08-01 02:18:56 +00:00", providedBy: "ebay.com" },
+  { rating: 4, count: 4, publicationDate: "2026-06-22 02:18:56 +00:00", providedBy: "harveynorman.com.au" },
+  { rating: 4, count: 4, publicationDate: "2026-08-01 02:18:56 +00:00", providedBy: "macys.com" },
+  { rating: 4, count: 3, publicationDate: "2026-08-01 02:18:56 +00:00", providedBy: "very.co.uk" },
+  { rating: 4, count: 3, publicationDate: "2026-08-01 02:18:56 +00:00", providedBy: "vzw.com" },
+  { rating: 4, count: 2, publicationDate: "2026-08-01 02:18:56 +00:00", providedBy: "walmart.com" },
+  { rating: 4, count: 166, publicationDate: "2026-05-13 00:00:00 +00:00", providedBy: "bestbuy.com" },
+] as const;
+
+function buildValidatedRayBanMetaRecentReviewItems() {
+  let rank = 0;
+
+  return VALIDATED_RAY_BAN_META_RECENT_REVIEW_GROUPS.flatMap((group) =>
+    Array.from({ length: group.count }, () => {
+      rank += 1;
+
+      return {
+        type: "google_shopping_review_item",
+        rank_group: rank,
+        rank_absolute: rank,
+        provided_by: group.providedBy,
+        publication_date: group.publicationDate,
+        rating: {
+          value: group.rating,
+          rating_max: 5,
+        },
+      };
+    })
+  );
+}
+
+// Sanitized fixture captured from the approved Phase 3G DataForSEO Google
+// Shopping Reviews validation. It keeps only rating, approximate publication
+// date, source, and rank fields required to reproduce the guarded 90-day
+// recentAverageRating calculation. No credentials, Authorization headers,
+// review text, authors, or unrelated product data are stored.
+export const VALIDATED_RAY_BAN_META_DATAFORSEO_GOOGLE_SHOPPING_REVIEWS_RESPONSE = {
+  status_code: 20000,
+  status_message: "Ok.",
+  tasks_error: 0,
+  tasks: [
+    {
+      status_code: 20000,
+      status_message: "Ok.",
+      result_count: 1,
+      result: [
+        {
+          product_id: "11716803554991446550",
+          datetime: "2026-08-22 02:19:01 +00:00",
+          items_count: 200,
+          items: buildValidatedRayBanMetaRecentReviewItems(),
+        },
+      ],
+    },
+  ],
+} as const;
+
 export function buildValidatedRayBanMetaLiveSnapshot(): ProductTrendSnapshot {
   const timestamp = VALIDATED_RAY_BAN_META_LIVE_TIMESTAMP;
   const now = new Date(timestamp);
@@ -223,9 +287,27 @@ export function buildValidatedRayBanMetaLiveSnapshot(): ProductTrendSnapshot {
     endpoint: DATAFORSEO_GOOGLE_SHOPPING_PRODUCTS_TASK_GET_ADVANCED_PATH_PREFIX,
     minimumMatchConfidence: reviewConfig.minimumMatchConfidence,
   });
+  const recentReviewObservation = mapDataForSeoGoogleShoppingReviewsResponse({
+    response: VALIDATED_RAY_BAN_META_DATAFORSEO_GOOGLE_SHOPPING_REVIEWS_RESPONSE,
+    productId: RAY_BAN_META_PRODUCT_ID,
+    identifiers: {
+      gid: reviewObservation.identifiers.gid ?? "",
+      productId: reviewObservation.identifiers.productId,
+      dataDocid: reviewObservation.identifiers.dataDocid,
+    },
+    locationCode: reviewConfig.locationCode,
+    languageCode: reviewConfig.languageCode,
+    fetchedAt: timestamp,
+    snapshotTimestamp: timestamp,
+    windowDays: reviewConfig.recentReviewsWindowDays,
+    minimumScoringSampleSize: reviewConfig.recentReviewsMinimumScoringSampleSize,
+    provisionalSampleSize: reviewConfig.recentReviewsProvisionalSampleSize,
+    endpoint: DATAFORSEO_GOOGLE_SHOPPING_REVIEWS_TASK_GET_ADVANCED_PATH_PREFIX,
+  });
   const liveReviewSignals = buildReviewQualitySignalsFromObservation({
     productId: RAY_BAN_META_PRODUCT_ID,
     observation: reviewObservation,
+    recentReviews: recentReviewObservation,
   }).signals;
   const reviewSignals = mergeLiveReviewSignalsWithMockFallback(
     liveReviewSignals,

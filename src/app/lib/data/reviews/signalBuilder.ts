@@ -1,9 +1,14 @@
 import { normalizeLinear, normalizeLogScale, roundTo } from "../../scoring/normalization";
 import type { NormalizedTrendSignal } from "../types";
-import type { GoogleShoppingReviewObservation, ReviewSignalBuildResult } from "./types";
+import type {
+  GoogleShoppingRecentReviewsObservation,
+  GoogleShoppingReviewObservation,
+  ReviewSignalBuildResult,
+} from "./types";
 
 const REVIEW_AVERAGE_RATING_CONFIDENCE = 92;
 const REVIEW_RATING_EVIDENCE_CONFIDENCE = 91;
+const REVIEW_RECENT_AVERAGE_RATING_CONFIDENCE = 89;
 
 function optionalString(value: string | undefined): string | undefined {
   return value && value.length ? value : undefined;
@@ -20,9 +25,41 @@ function ratingEvidenceMetadata(observation: GoogleShoppingReviewObservation) {
   };
 }
 
+function recentAverageRatingMetadata(recentReviews: GoogleShoppingRecentReviewsObservation | undefined) {
+  if (!recentReviews) return {};
+
+  return {
+    recentAverageRatingStatus: recentReviews.status,
+    recentAverageRatingComputed: recentReviews.recentAverageRating,
+    provisionalRecentAverageRating: recentReviews.provisionalRecentAverageRating,
+    recentAverageRatingCalculationMethod: recentReviews.calculationMethod,
+    recentAverageRatingDatePrecision: recentReviews.datePrecision,
+    recentAverageRatingWindowStart: recentReviews.windowStart,
+    recentAverageRatingWindowEnd: recentReviews.windowEnd,
+    recentAverageRatingWindowDays: recentReviews.windowDays,
+    qualifyingRecentReviewCount: recentReviews.qualifyingReviewCount,
+    totalReviewsFetched: recentReviews.totalReviewsFetched,
+    datedReviewCount: recentReviews.datedReviewCount,
+    excludedReviewCount: recentReviews.excludedReviewCount,
+    undatedReviewCount: recentReviews.undatedReviewCount,
+    invalidRatingCount: recentReviews.invalidRatingCount,
+    outsideWindowReviewCount: recentReviews.outsideWindowReviewCount,
+    totalReviewsAvailable: recentReviews.totalReviewsAvailable,
+    recentReviewSourceDomains: recentReviews.sourceDomains.join(", "),
+    recentReviewsSourceEndpoint: recentReviews.endpoint,
+    recentReviewsSourceTimestamp: recentReviews.fetchedAt,
+    recentReviewsSourceDatetime: recentReviews.sourceDatetime,
+    recentReviewsSourceCost: recentReviews.cost,
+    recentReviewsProviderGid: recentReviews.identifiers.gid,
+    recentReviewsProviderProductId: optionalString(recentReviews.identifiers.productId),
+    recentReviewsProviderDataDocid: optionalString(recentReviews.identifiers.dataDocid),
+  };
+}
+
 export function buildReviewQualitySignalsFromObservation(input: {
   productId: string;
   observation: GoogleShoppingReviewObservation;
+  recentReviews?: GoogleShoppingRecentReviewsObservation;
 }): ReviewSignalBuildResult {
   const commonMetadata = {
     provider: "dataforseo_google_shopping",
@@ -44,6 +81,7 @@ export function buildReviewQualitySignalsFromObservation(input: {
     rawProviderRating: input.observation.averageRating,
     providerRatingMax: input.observation.ratingMax,
     ...ratingEvidenceMetadata(input.observation),
+    ...recentAverageRatingMetadata(input.recentReviews),
     providerVariantGrouping: input.observation.providerVariantGrouping,
     providerRankGroup: input.observation.rankGroup,
     providerRankAbsolute: input.observation.rankAbsolute,
@@ -109,8 +147,45 @@ export function buildReviewQualitySignalsFromObservation(input: {
     });
   }
 
+  if (typeof input.recentReviews?.recentAverageRating === "number") {
+    signals.push({
+      source: "reviews",
+      signalType: "reviewQuality",
+      productId: input.productId,
+      sourceProvenance: {
+        mode: "derived-live",
+        provider: "dataforseo_google_shopping_reviews",
+        providerLabel: "DataForSEO Google Shopping Reviews",
+        providerMetric: "recentAverageRating90d",
+        approvalStatus: "not-required",
+        liveApiRequestMade: true,
+        notes: "recentAverageRating is computed from live Google Shopping review ratings with provider-observed approximate publication dates inside the trailing 90-day window.",
+      },
+      value: input.recentReviews.recentAverageRating,
+      normalizedValue: roundTo(normalizeLinear(input.recentReviews.recentAverageRating, 3.0, 4.8), 2),
+      sampleSize: input.recentReviews.qualifyingReviewCount,
+      timestamp: input.recentReviews.fetchedAt,
+      confidence: REVIEW_RECENT_AVERAGE_RATING_CONFIDENCE,
+      metadata: {
+        ...commonMetadata,
+        provider: "dataforseo_google_shopping_reviews",
+        providerMetric: "recentAverageRating90d",
+        sourceName: "DataForSEO Google Shopping Reviews API",
+        sourceMetric: "items[].rating.value",
+        sourceEndpoint: input.recentReviews.endpoint,
+        sourceTimestamp: input.recentReviews.fetchedAt,
+        sourceDatetime: input.recentReviews.sourceDatetime,
+        sourceCost: input.recentReviews.cost,
+        confidence: REVIEW_RECENT_AVERAGE_RATING_CONFIDENCE,
+        engineField: "recentAverageRating",
+        engineValue: input.recentReviews.recentAverageRating,
+      },
+    });
+  }
+
   return {
     signals,
     observation: input.observation,
+    recentReviews: input.recentReviews,
   };
 }

@@ -2,9 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   DATAFORSEO_GOOGLE_SHOPPING_PRODUCTS_TASK_GET_ADVANCED_PATH_PREFIX,
   DATAFORSEO_GOOGLE_SHOPPING_PRODUCTS_TASK_POST_PATH,
+  DATAFORSEO_GOOGLE_SHOPPING_REVIEWS_TASK_GET_ADVANCED_PATH_PREFIX,
+  DATAFORSEO_GOOGLE_SHOPPING_REVIEWS_TASK_POST_PATH,
   DataForSeoGoogleShoppingProductsClient,
+  DataForSeoGoogleShoppingReviewsClient,
   ReviewProviderError,
   mapDataForSeoGoogleShoppingProductsResponse,
+  mapDataForSeoGoogleShoppingReviewsResponse,
   type FetchLike,
 } from "../client";
 import { REVIEW_PRODUCT_IDENTITIES, readReviewProviderConfig } from "../config";
@@ -41,6 +45,60 @@ function productsResponse(items: unknown[]) {
       },
     ],
   };
+}
+
+function shoppingReviewsResponse(items: unknown[], reviewsCount = items.length) {
+  return {
+    status_code: 20000,
+    status_message: "Ok.",
+    tasks_error: 0,
+    tasks: [
+      {
+        status_code: 20000,
+        status_message: "Ok.",
+        cost: 0.015,
+        result_count: 1,
+        result: [
+          {
+            product_id: "11716803554991446550",
+            datetime: "2026-08-21 23:47:20 +00:00",
+            reviews_count: reviewsCount,
+            items_count: items.length,
+            items,
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function reviewItem(
+  rating: unknown,
+  publicationDate: string | null,
+  overrides: Record<string, unknown> = {}
+): Record<string, unknown> {
+  return {
+    type: "google_shopping_review_item",
+    rank_group: 1,
+    rank_absolute: 1,
+    url: "https://example.com/reviews/ray-ban-meta",
+    provided_by: "example.com",
+    publication_date: publicationDate,
+    rating: {
+      rating_type: "Max5",
+      value: rating,
+      votes_count: null,
+      rating_max: 5,
+    },
+    ...overrides,
+  };
+}
+
+function repeatedReviewItems(count: number, rating: number, publicationDate = "2026-08-01 00:00:00 +00:00") {
+  return Array.from({ length: count }, (_, index) => reviewItem(rating, publicationDate, {
+    rank_group: index + 1,
+    rank_absolute: index + 1,
+  }));
 }
 
 const rayBanMetaItem = {
@@ -216,6 +274,132 @@ describe("DataForSEO Google Shopping review mapping", () => {
     })).toThrow("high-confidence rated product match");
   });
 
+  it("computes derived-live recentAverageRating from 30 qualifying 90-day reviews", () => {
+    const observation = mapDataForSeoGoogleShoppingReviewsResponse({
+      response: shoppingReviewsResponse([
+        ...repeatedReviewItems(15, 5),
+        ...repeatedReviewItems(15, 4),
+      ]),
+      productId: "ray-ban-meta",
+      identifiers: {
+        gid: "11193998885220934472",
+        productId: "11716803554991446550",
+        dataDocid: "4690297997048968068",
+      },
+      locationCode: 2840,
+      languageCode: "en",
+      fetchedAt: now.toISOString(),
+      snapshotTimestamp: "2026-08-21T00:00:00.000Z",
+      windowDays: 90,
+      minimumScoringSampleSize: 30,
+      provisionalSampleSize: 10,
+    });
+
+    expect(observation.status).toBe("derived-live");
+    expect(observation.recentAverageRating).toBe(4.5);
+    expect(observation.qualifyingReviewCount).toBe(30);
+    expect(observation.totalReviewsFetched).toBe(30);
+    expect(observation.windowStart).toBe("2026-05-23T00:00:00.000Z");
+    expect(observation.windowEnd).toBe("2026-08-21T00:00:00.000Z");
+    expect(observation.sourceDomains).toEqual(["example.com"]);
+    expect(observation.datePrecision).toBe("provider_observed_approximate_relative_timestamp");
+  });
+
+  it("keeps 10-29 qualifying reviews provisional instead of scoring-ready", () => {
+    const observation = mapDataForSeoGoogleShoppingReviewsResponse({
+      response: shoppingReviewsResponse(repeatedReviewItems(20, 4.8)),
+      productId: "ray-ban-meta",
+      identifiers: { gid: "11193998885220934472" },
+      locationCode: 2840,
+      languageCode: "en",
+      fetchedAt: now.toISOString(),
+      snapshotTimestamp: "2026-08-21T00:00:00.000Z",
+      windowDays: 90,
+      minimumScoringSampleSize: 30,
+      provisionalSampleSize: 10,
+    });
+
+    expect(observation.status).toBe("provisional");
+    expect(observation.recentAverageRating).toBeUndefined();
+    expect(observation.provisionalRecentAverageRating).toBe(4.8);
+    expect(observation.qualifyingReviewCount).toBe(20);
+  });
+
+  it("falls below provisional status with fewer than 10 qualifying reviews", () => {
+    const observation = mapDataForSeoGoogleShoppingReviewsResponse({
+      response: shoppingReviewsResponse(repeatedReviewItems(9, 4.8)),
+      productId: "ray-ban-meta",
+      identifiers: { gid: "11193998885220934472" },
+      locationCode: 2840,
+      languageCode: "en",
+      fetchedAt: now.toISOString(),
+      snapshotTimestamp: "2026-08-21T00:00:00.000Z",
+      windowDays: 90,
+      minimumScoringSampleSize: 30,
+      provisionalSampleSize: 10,
+    });
+
+    expect(observation.status).toBe("insufficient");
+    expect(observation.recentAverageRating).toBeUndefined();
+    expect(observation.provisionalRecentAverageRating).toBeUndefined();
+    expect(observation.qualifyingReviewCount).toBe(9);
+  });
+
+  it("excludes outside-window, undated, and invalid-rating reviews from the recent average", () => {
+    const observation = mapDataForSeoGoogleShoppingReviewsResponse({
+      response: shoppingReviewsResponse([
+        ...repeatedReviewItems(30, 4.5, "2026-08-01 00:00:00 +00:00"),
+        reviewItem(5, "2026-05-22 23:59:59 +00:00"),
+        reviewItem(1, null),
+        reviewItem(null, "2026-08-01 00:00:00 +00:00"),
+        reviewItem(6, "2026-08-01 00:00:00 +00:00"),
+      ]),
+      productId: "ray-ban-meta",
+      identifiers: { gid: "11193998885220934472" },
+      locationCode: 2840,
+      languageCode: "en",
+      fetchedAt: now.toISOString(),
+      snapshotTimestamp: "2026-08-21T00:00:00.000Z",
+      windowDays: 90,
+      minimumScoringSampleSize: 30,
+      provisionalSampleSize: 10,
+    });
+
+    expect(observation.status).toBe("derived-live");
+    expect(observation.recentAverageRating).toBe(4.5);
+    expect(observation.totalReviewsFetched).toBe(34);
+    expect(observation.qualifyingReviewCount).toBe(30);
+    expect(observation.outsideWindowReviewCount).toBe(1);
+    expect(observation.undatedReviewCount).toBe(1);
+    expect(observation.invalidRatingCount).toBe(2);
+    expect(observation.excludedReviewCount).toBe(4);
+  });
+
+  it("includes exact 90-day window boundaries anchored to the snapshot timestamp", () => {
+    const observation = mapDataForSeoGoogleShoppingReviewsResponse({
+      response: shoppingReviewsResponse([
+        reviewItem(5, "2026-05-23 00:00:00 +00:00"),
+        reviewItem(4, "2026-08-21 00:00:00 +00:00"),
+        ...repeatedReviewItems(28, 4.5, "2026-07-01 00:00:00 +00:00"),
+      ]),
+      productId: "ray-ban-meta",
+      identifiers: { gid: "11193998885220934472" },
+      locationCode: 2840,
+      languageCode: "en",
+      fetchedAt: now.toISOString(),
+      snapshotTimestamp: "2026-08-21T00:00:00.000Z",
+      windowDays: 90,
+      minimumScoringSampleSize: 30,
+      provisionalSampleSize: 10,
+    });
+
+    expect(observation.status).toBe("derived-live");
+    expect(observation.qualifyingReviewCount).toBe(30);
+    expect(observation.reviews[0].publicationDate).toBe("2026-05-23T00:00:00.000Z");
+    expect(observation.reviews[1].publicationDate).toBe("2026-08-21T00:00:00.000Z");
+    expect(observation.recentAverageRating).toBe(4.5);
+  });
+
   it("uses the Google Shopping Products POST and Advanced GET task flow", async () => {
     const calls: Array<{ url: string; auth?: string; method?: string; body?: string }> = [];
     const fetchImpl: FetchLike = async (url, init) => {
@@ -233,8 +417,8 @@ describe("DataForSEO Google Shopping review mapping", () => {
           tasks: [
             {
               id: "task-id",
-              status_code: 20000,
-              status_message: "Ok.",
+              status_code: 20100,
+              status_message: "Task Created.",
             },
           ],
         });
@@ -274,6 +458,78 @@ describe("DataForSEO Google Shopping review mapping", () => {
     ]);
     expect(calls[1].url).toBe(
       `https://api.dataforseo.com${DATAFORSEO_GOOGLE_SHOPPING_PRODUCTS_TASK_GET_ADVANCED_PATH_PREFIX}/task-id`
+    );
+    expect(calls[1].method).toBe("GET");
+  });
+
+  it("uses the Google Shopping Reviews POST and Advanced GET task flow with capped standard-priority depth", async () => {
+    const calls: Array<{ url: string; auth?: string; method?: string; body?: string }> = [];
+    const fetchImpl: FetchLike = async (url, init) => {
+      calls.push({
+        url,
+        auth: init?.headers?.Authorization,
+        method: init?.method,
+        body: init?.body,
+      });
+
+      if (init?.method === "POST") {
+        return response({
+          status_code: 20000,
+          status_message: "Ok.",
+          tasks: [
+            {
+              id: "reviews-task-id",
+              status_code: 20100,
+              status_message: "Task Created.",
+            },
+          ],
+        });
+      }
+
+      return response(shoppingReviewsResponse(repeatedReviewItems(30, 4.5)));
+    };
+    const config = readReviewProviderConfig({}, {
+      mode: "live",
+      apiLogin: "login",
+      apiPassword: "password",
+      apiBaseUrl: "https://api.dataforseo.com",
+      taskPollAttempts: 1,
+      taskPollIntervalMs: 0,
+      recentReviewsDepth: 200,
+      now: () => now,
+    });
+    const client = new DataForSeoGoogleShoppingReviewsClient(config, fetchImpl);
+
+    await client.getRecentProductReviews({
+      productId: "ray-ban-meta",
+      identity,
+      identifiers: {
+        gid: "11193998885220934472",
+        productId: "11716803554991446550",
+        dataDocid: "4690297997048968068",
+      },
+      locationCode: 2840,
+      languageCode: "en",
+      snapshotTimestamp: "2026-08-21T00:00:00.000Z",
+    });
+
+    expect(calls[0].url).toBe(`https://api.dataforseo.com${DATAFORSEO_GOOGLE_SHOPPING_REVIEWS_TASK_POST_PATH}`);
+    expect(calls[0].method).toBe("POST");
+    expect(calls[0].auth).toMatch(/^Basic /);
+    expect(JSON.parse(calls[0].body ?? "null")).toEqual([
+      {
+        gid: "11193998885220934472",
+        product_id: "11716803554991446550",
+        data_docid: "4690297997048968068",
+        location_code: 2840,
+        language_code: "en",
+        depth: 200,
+        priority: 1,
+        tag: "trendiq:ray-ban-meta:review-quality:google-shopping-reviews",
+      },
+    ]);
+    expect(calls[1].url).toBe(
+      `https://api.dataforseo.com${DATAFORSEO_GOOGLE_SHOPPING_REVIEWS_TASK_GET_ADVANCED_PATH_PREFIX}/reviews-task-id`
     );
     expect(calls[1].method).toBe("GET");
   });

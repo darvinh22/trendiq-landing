@@ -2,10 +2,12 @@ import { normalizeInverseLinear, normalizeLinear, normalizeLogScale, roundTo } f
 import { DATA_LAYER_TIMESTAMP, RAY_BAN_META_PRODUCT_ID, RAY_BAN_META_SIGNAL_INPUTS } from "../mockProviderSignals";
 import { InMemorySearchCache, type SearchCache } from "../search/cache";
 import {
+  DataForSeoGoogleShoppingReviewsClient,
   DataForSeoGoogleShoppingProductsClient,
   buildReviewQualitySignalsFromObservation,
   readReviewProviderConfig,
   shouldUseLiveReviews,
+  type GoogleShoppingRecentReviewsClient,
   type GoogleShoppingReviewsClient,
   type ReviewProviderConfig,
   type ReviewSignalBuildResult,
@@ -178,6 +180,7 @@ export const mockReviewsProvider: TrendSignalProvider = {
 
 export interface ReviewQualitySignalProviderDependencies {
   client?: GoogleShoppingReviewsClient;
+  recentReviewsClient?: GoogleShoppingRecentReviewsClient;
   cache?: SearchCache<ReviewSignalBuildResult>;
   fallbackProvider?: TrendSignalProvider;
 }
@@ -262,9 +265,15 @@ export class ReviewQualitySignalProvider implements AsyncTrendSignalProvider {
         locationCode: this.config.locationCode,
         languageCode: this.config.languageCode,
       });
+      const recentReviews = await this.getRecentReviews({
+        productId,
+        identity,
+        observation,
+      });
       const result = buildReviewQualitySignalsFromObservation({
         productId,
         observation,
+        recentReviews,
       });
 
       this.cache.set(cacheKey, result, this.config.cacheTtlMs, this.config.now().getTime());
@@ -284,7 +293,33 @@ export class ReviewQualitySignalProvider implements AsyncTrendSignalProvider {
       identity?.canonicalSearchQuery ?? "",
       this.config.locationCode,
       this.config.languageCode,
+      this.config.recentReviewsDepth,
+      this.config.recentReviewsWindowDays,
+      this.config.recentReviewsMinimumScoringSampleSize,
+      this.config.recentReviewsProvisionalSampleSize,
     ].join(":");
+  }
+
+  private async getRecentReviews(input: {
+    productId: string;
+    identity: NonNullable<ReviewProviderConfig["productIdentities"][string]>;
+    observation: Awaited<ReturnType<GoogleShoppingReviewsClient["getProductReviewAggregate"]>>;
+  }) {
+    try {
+      const client = this.dependencies.recentReviewsClient
+        ?? new DataForSeoGoogleShoppingReviewsClient(this.config);
+
+      return await client.getRecentProductReviews({
+        productId: input.productId,
+        identity: input.identity,
+        identifiers: input.observation.identifiers,
+        locationCode: this.config.locationCode,
+        languageCode: this.config.languageCode,
+        snapshotTimestamp: this.config.now().toISOString(),
+      });
+    } catch {
+      return undefined;
+    }
   }
 }
 

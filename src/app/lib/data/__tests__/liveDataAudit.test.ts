@@ -79,7 +79,24 @@ describe("live data audit", () => {
 
   it("summarizes a mixed DataForSEO plus mock/fallback snapshot", () => {
     const audit = VALIDATED_RAY_BAN_META_LIVE_SNAPSHOT.liveDataAudit;
+    const reviewComponent = audit?.componentSummaries.find((component) => component.component === "reviewQuality");
+    const recentAverageRatingField = reviewComponent?.fields.find((field) =>
+      field.engineField === "recentAverageRating"
+    );
 
+    expect(VALIDATED_RAY_BAN_META_LIVE_SNAPSHOT.trendIQScore.score).toBe(61);
+    expect(VALIDATED_RAY_BAN_META_LIVE_SNAPSHOT.confidence.score).toBe(92);
+    expect(VALIDATED_RAY_BAN_META_LIVE_SNAPSHOT.confidence.level).toBe("High");
+    expect(VALIDATED_RAY_BAN_META_LIVE_SNAPSHOT.trendStatus).toEqual({
+      changePercent: -82.8,
+      status: "Cooling",
+    });
+    expect(VALIDATED_RAY_BAN_META_LIVE_SNAPSHOT.aggregatedSignals.reviewQuality.recentAverageRating).toBe(3.94);
+    expect(VALIDATED_RAY_BAN_META_LIVE_SNAPSHOT.trendIQScore.components.reviewQuality).toBe(70.29);
+    expect(reviewComponent?.weightedIQContribution).toBe(10.54);
+    expect(recentAverageRatingField?.provenance).toBe("derived-live");
+    expect(recentAverageRatingField?.liveBackedWeight).toBe(0.0225);
+    expect(audit?.liveCoveragePercent).toBe(34.8);
     expect(audit?.liveCoveragePercent).toBeGreaterThan(0);
     expect(audit?.liveCoveragePercent).toBeLessThan(100);
     expect(audit?.liveComponents).toEqual(["searchMomentum", "reviewQuality", "growthVelocity"]);

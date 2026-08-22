@@ -13,6 +13,10 @@ const DEFAULT_LANGUAGE_CODE = "en";
 const DEFAULT_TASK_DEPTH = 40;
 const DEFAULT_TASK_POLL_ATTEMPTS = 3;
 const DEFAULT_TASK_POLL_INTERVAL_MS = 2000;
+const DEFAULT_RECENT_REVIEWS_DEPTH = 200;
+const DEFAULT_RECENT_REVIEWS_WINDOW_DAYS = 90;
+const DEFAULT_RECENT_REVIEWS_MINIMUM_SCORING_SAMPLE_SIZE = 30;
+const DEFAULT_RECENT_REVIEWS_PROVISIONAL_SAMPLE_SIZE = 10;
 
 type RuntimeEnv = Record<string, string | undefined>;
 
@@ -73,6 +77,20 @@ export function readReviewProviderConfig(
       ?? parsePositiveInteger(env.TRENDIQ_REVIEWS_TASK_POLL_ATTEMPTS, DEFAULT_TASK_POLL_ATTEMPTS),
     taskPollIntervalMs: overrides.taskPollIntervalMs
       ?? parsePositiveInteger(env.TRENDIQ_REVIEWS_TASK_POLL_INTERVAL_MS, DEFAULT_TASK_POLL_INTERVAL_MS),
+    recentReviewsDepth: overrides.recentReviewsDepth
+      ?? parsePositiveInteger(env.TRENDIQ_REVIEWS_RECENT_DEPTH, DEFAULT_RECENT_REVIEWS_DEPTH),
+    recentReviewsWindowDays: overrides.recentReviewsWindowDays
+      ?? parsePositiveInteger(env.TRENDIQ_REVIEWS_RECENT_WINDOW_DAYS, DEFAULT_RECENT_REVIEWS_WINDOW_DAYS),
+    recentReviewsMinimumScoringSampleSize: overrides.recentReviewsMinimumScoringSampleSize
+      ?? parsePositiveInteger(
+        env.TRENDIQ_REVIEWS_RECENT_MIN_SCORING_SAMPLE,
+        DEFAULT_RECENT_REVIEWS_MINIMUM_SCORING_SAMPLE_SIZE
+      ),
+    recentReviewsProvisionalSampleSize: overrides.recentReviewsProvisionalSampleSize
+      ?? parsePositiveInteger(
+        env.TRENDIQ_REVIEWS_RECENT_PROVISIONAL_SAMPLE,
+        DEFAULT_RECENT_REVIEWS_PROVISIONAL_SAMPLE_SIZE
+      ),
     minimumMatchConfidence: overrides.minimumMatchConfidence ?? "high",
     productIdentities: overrides.productIdentities ?? REVIEW_PRODUCT_IDENTITIES,
     now: overrides.now ?? (() => new Date()),
