@@ -27,6 +27,13 @@ export type LiveDataCapability =
 
 export type LiveReadinessStatus = "ready" | "guarded" | "blocked" | "unsupported";
 export type ProviderPolicy = "allowed" | "guarded" | "blocked";
+export type EstimatedCostCategory = "free" | "very_low" | "low" | "medium" | "unknown";
+export type FutureExecutionEligibility =
+  | "eligible"
+  | "needs_identity"
+  | "needs_guardrail"
+  | "blocked"
+  | "unsupported";
 
 export type LiveProviderId =
   | "dataforseo_trends"
@@ -105,6 +112,52 @@ export interface ProviderUseDecision extends CapabilityEvaluation {
   provider: LiveProviderId;
   allowed: boolean;
   policy: ProviderPolicy;
+}
+
+export interface ProviderRoute {
+  capability: LiveDataCapability;
+  provider: LiveProviderId;
+  status: LiveReadinessStatus;
+  reason: string;
+  requiredIdentityFields: ProductIdentityRequirement[];
+  missingIdentityFields: ProductIdentityRequirement[];
+  estimatedPaidRequest: boolean;
+  estimatedCostCategory: EstimatedCostCategory;
+  executionAllowed: false;
+  futureExecutionEligibility: FutureExecutionEligibility;
+  warnings: string[];
+}
+
+export type ProviderRouteDecision = ProviderRoute;
+
+export interface ProviderRoutingPlan {
+  profile: ProductProfile;
+  routes: ProviderRoute[];
+  blockedRoutes: ProviderRouteDecision[];
+  guardedRoutes: ProviderRouteDecision[];
+  unsupportedCapabilities: LiveDataCapability[];
+  warnings: string[];
+  dryRun: true;
+}
+
+export interface ProviderRoutingReport {
+  product: {
+    productId: string;
+    source: ProductProfileSource;
+    canonicalTitle: string;
+    productType: ProductType;
+    identityConfidence: ProductIdentityConfidence;
+  };
+  type: ProductType;
+  identityConfidence: ProductIdentityConfidence;
+  providerRoutes: ProviderRoute[];
+  blockedProviders: LiveProviderId[];
+  guardedProviders: LiveProviderId[];
+  missingIdentity: ProductIdentityRequirement[];
+  paidRouteWarnings: string[];
+  futureExecutionEligibility: Record<FutureExecutionEligibility, ProviderRoute[]>;
+  warnings: string[];
+  dryRun: true;
 }
 
 export interface ProductReadinessReport {
