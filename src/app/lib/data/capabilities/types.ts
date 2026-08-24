@@ -1,4 +1,11 @@
 export type ProductProfileSource = "catalog" | "user_search" | "resolved_provider";
+export type ProductResolutionSource =
+  | "catalog_match"
+  | "local_rules"
+  | "cached_resolution"
+  | "provider_resolution";
+
+export type ProductResolutionCacheStatus = "hit" | "miss" | "expired" | "disabled";
 
 export type ProductType =
   | "hardware"
@@ -68,6 +75,21 @@ export interface ProductProfile {
   guardrails?: ProductIdentityGuardrails;
 }
 
+export interface ProductResolution {
+  originalQuery: string;
+  normalizedQuery: string;
+  canonicalTitle: string;
+  brand?: string;
+  inferredProductType: ProductType;
+  category?: string;
+  modelGeneration?: string;
+  aliases: string[];
+  identityConfidence: ProductIdentityConfidence;
+  resolutionSource: ProductResolutionSource;
+  matchedCatalogProductId?: string;
+  warnings: string[];
+}
+
 export interface CapabilityEvaluation {
   capability: LiveDataCapability;
   status: LiveReadinessStatus;
@@ -95,4 +117,13 @@ export interface ProductReadinessReport {
   capabilities: CapabilityEvaluation[];
   missingIdentityRequirements: ProductIdentityRequirement[];
   blockedProviders: LiveProviderId[];
+}
+
+export interface ProductResolutionResult {
+  resolution: ProductResolution;
+  profile: ProductProfile;
+  readiness: ProductReadinessReport;
+  cacheStatus: ProductResolutionCacheStatus;
+  cacheKey: string;
+  expiresAt?: string;
 }
