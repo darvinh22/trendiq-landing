@@ -34,6 +34,42 @@ export type FutureExecutionEligibility =
   | "needs_guardrail"
   | "blocked"
   | "unsupported";
+export type ProviderIdentityDiscoveryStatus =
+  | "resolved"
+  | "ambiguous"
+  | "not_found"
+  | "blocked"
+  | "error";
+export type ProviderIdentityCacheStatus = "hit" | "miss" | "expired" | "disabled";
+export type CanonicalIdentityLevel = "product_family" | "size_variant";
+export type ProviderIdentityCandidateBucket =
+  | "canonical-product-equivalent"
+  | "legitimate-variant"
+  | "different-size"
+  | "different-generation/model"
+  | "bundle/kit"
+  | "accessory"
+  | "refurbished/used"
+  | "incomplete-provider-identity"
+  | "brand/title-conflict"
+  | "unrelated";
+export type ProviderIdentityBundleStatus = "standalone" | "bundle" | "accessory";
+export type ProviderIdentityCondition = "new" | "refurbished" | "used" | "unknown";
+export type ProviderIdentityListingType =
+  | "canonical_product"
+  | "retailer_listing"
+  | "marketplace_duplicate"
+  | "variant_listing"
+  | "bundle"
+  | "accessory"
+  | "condition_variant"
+  | "unrelated";
+export type ProviderIdGroupScope =
+  | "product_family"
+  | "size_variant"
+  | "listing_specific"
+  | "mixed_or_unclear";
+export type ProviderIdentityCompleteness = "complete" | "incomplete";
 
 export type LiveProviderId =
   | "dataforseo_trends"
@@ -158,6 +194,148 @@ export interface ProviderRoutingReport {
   futureExecutionEligibility: Record<FutureExecutionEligibility, ProviderRoute[]>;
   warnings: string[];
   dryRun: true;
+}
+
+export interface ProviderIdentityEvidence {
+  field: string;
+  expected?: string | string[];
+  observed?: string | string[];
+  score?: number;
+  passed: boolean;
+  reason: string;
+}
+
+export interface ProviderIdentityCandidate {
+  provider: LiveProviderId;
+  title: string;
+  brand?: string;
+  seller?: string;
+  productType?: ProductType;
+  providerIds: Record<string, string>;
+  canonicalProductFamily?: string;
+  modelGeneration?: string;
+  sizeVariant?: string;
+  colorVariant?: string;
+  bundleStatus?: ProviderIdentityBundleStatus;
+  condition?: ProviderIdentityCondition;
+  listingType?: ProviderIdentityListingType;
+  matchedVariant?: string;
+  rankGroup?: number;
+  rankAbsolute?: number;
+  isBestMatch?: boolean;
+}
+
+export interface ProviderIdentityCandidateClassification {
+  candidate: ProviderIdentityCandidate;
+  bucket: ProviderIdentityCandidateBucket;
+  canonicalProductFamily: string;
+  modelGeneration?: string;
+  sizeVariant?: string;
+  colorVariant?: string;
+  bundleStatus: ProviderIdentityBundleStatus;
+  condition: ProviderIdentityCondition;
+  listingType: ProviderIdentityListingType;
+  groupKey: string;
+  providerIdComplete: boolean;
+  providerIdSignature?: string;
+  evidence: ProviderIdentityEvidence[];
+  warnings: string[];
+}
+
+export interface ProviderIdentityProviderIdGroup {
+  signature: string;
+  providerIds: Record<string, string>;
+  canonicalProductFamily: string;
+  modelGeneration?: string;
+  sizeVariant?: string;
+  sizeVariants: string[];
+  colorVariants: string[];
+  sellers: string[];
+  candidateCount: number;
+  bestRank?: number;
+  ranks: number[];
+  titles: string[];
+  bundleStatuses: ProviderIdentityBundleStatus[];
+  conditions: ProviderIdentityCondition[];
+  listingTypes: ProviderIdentityListingType[];
+  titleConsistency: ProductIdentityConfidence;
+  sellerDiversity: number;
+  identityCompleteness: ProviderIdentityCompleteness;
+  variantConsistency: ProductIdentityConfidence;
+  scope: ProviderIdGroupScope;
+  evidenceScore: number;
+  identityConfidence: ProductIdentityConfidence;
+  providerIdsSafeToPersist: boolean;
+  persistenceReason: string;
+  warnings: string[];
+}
+
+export interface ProviderIdentityGroup {
+  groupKey: string;
+  canonicalProductFamily: string;
+  modelGeneration?: string;
+  sizeVariant?: string;
+  sizeVariants: string[];
+  colorVariants: string[];
+  members: ProviderIdentityCandidateClassification[];
+  strongestCandidate: ProviderIdentityCandidate;
+  score: number;
+  identityConfidence: ProductIdentityConfidence;
+  providerIds: Record<string, string>;
+  providerIdsSafeToPersist: boolean;
+  providerIdPersistenceReason: string;
+  providerIdConfidence: ProductIdentityConfidence;
+  providerIdGroups: ProviderIdentityProviderIdGroup[];
+  selectedProviderIdGroup?: ProviderIdentityProviderIdGroup;
+  sellerCount: number;
+  warnings: string[];
+  evidence: ProviderIdentityEvidence[];
+}
+
+export interface ProviderIdentityDiscoveryRequest {
+  profile: ProductProfile;
+  provider: LiveProviderId;
+  capability: LiveDataCapability;
+  locale?: string;
+  market?: string;
+}
+
+export interface ProviderIdentityDiscoveryResult {
+  provider: LiveProviderId;
+  status: ProviderIdentityDiscoveryStatus;
+  identityConfidence: ProductIdentityConfidence;
+  providerIds: Record<string, string>;
+  canonicalTitle?: string;
+  brand?: string;
+  modelGeneration?: string;
+  matchedVariant?: string;
+  warnings: string[];
+  evidence: ProviderIdentityEvidence[];
+  selectedCandidate?: ProviderIdentityCandidate;
+  selectedGroup?: ProviderIdentityGroup;
+  candidateCount: number;
+  identityGroupCount?: number;
+  discoveredAt: string;
+  cacheStatus: ProviderIdentityCacheStatus;
+  cacheKey?: string;
+}
+
+export interface ProviderIdentityDiscoveryReport {
+  originalQuery: string;
+  canonicalProduct: string;
+  provider: LiveProviderId;
+  candidateCount: number;
+  identityGroupCount?: number;
+  selectedCandidate?: ProviderIdentityCandidate;
+  selectedGroup?: ProviderIdentityGroup;
+  confidence: ProductIdentityConfidence;
+  providerIds: Record<string, string>;
+  warnings: string[];
+  cacheStatus: ProviderIdentityCacheStatus;
+  identityResolutionStatus: ProviderIdentityDiscoveryStatus;
+  routingBefore: ProviderRoutingPlan;
+  routingAfter: ProviderRoutingPlan;
+  executionAllowed: false;
 }
 
 export interface ProductReadinessReport {
