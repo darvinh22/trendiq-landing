@@ -1,5 +1,6 @@
 import type { ProductTrendSnapshot } from "../types";
 import type {
+  LiveDataCapability,
   LiveProviderId,
   ProductIdentityConfidence,
   ProductProfile,
@@ -56,6 +57,7 @@ export interface SnapshotCache {
 export const PRODUCT_RESOLUTION_CACHE_KEY = "product-resolution:{normalizedQuery}";
 export const PRODUCT_RESOLUTION_CACHE_VERSION = "product_resolution_v1";
 export const PROVIDER_IDENTITY_CACHE_VERSION = "provider_identity_v1";
+export const SIGNAL_EXECUTION_PLAN_CACHE_VERSION = "signal_execution_plan_v1";
 export const DEFAULT_PRODUCT_RESOLUTION_LOCALE = "en-US";
 
 export const PRODUCT_RESOLUTION_TTL_MS: Record<ProductIdentityConfidence, number> = {
@@ -71,11 +73,13 @@ export const PROVIDER_IDENTITY_TTL_MS: Record<ProductIdentityConfidence, number>
 };
 
 export const PROVIDER_IDENTITY_CACHE_KEY = "provider-identity:{productId}:{provider}";
+export const SIGNAL_EXECUTION_CACHE_KEY = "signal-execution:{productId}:{provider}:{capability}";
 export const SNAPSHOT_CACHE_KEY = "snapshot:{productId}:{scoreVersion}:{utcDay}";
 
 export const CACHE_TTL_CONCEPTS = {
   productResolution: "High-confidence: 30 days; medium-confidence: 7 days; low-confidence: 1 day.",
   providerIdentity: "High-confidence: 30 days; medium-confidence: 7 days; ambiguous/low-confidence identities are not canonical.",
+  signalExecutionPlan: "Planning metadata is recomputed from current profile, routing, identity, and cache state; no raw provider response is stored.",
   snapshot: "Immutable by productId, scoreVersion, and UTC day once saved.",
 } as const;
 
@@ -105,6 +109,26 @@ export function buildProviderIdentityCacheKey(
   ].filter((value): value is string => Boolean(value));
 
   return `provider-identity:${identityParts.map(normalizeCacheQuery).join(":")}`;
+}
+
+export function buildSignalExecutionCacheKey(
+  profile: ProductProfile,
+  provider: LiveProviderId,
+  capability: LiveDataCapability,
+  locale = DEFAULT_PRODUCT_RESOLUTION_LOCALE
+): string {
+  const identityParts = [
+    profile.productId,
+    provider,
+    capability,
+    locale.toLowerCase(),
+    profile.brand,
+    profile.canonicalTitle,
+    profile.modelGeneration,
+    profile.productType,
+  ].filter((value): value is string => Boolean(value));
+
+  return `signal-execution:${identityParts.map(normalizeCacheQuery).join(":")}`;
 }
 
 export class InMemoryProductResolutionCache implements ProductResolutionCache {

@@ -70,6 +70,41 @@ export type ProviderIdGroupScope =
   | "listing_specific"
   | "mixed_or_unclear";
 export type ProviderIdentityCompleteness = "complete" | "incomplete";
+export type SignalExecutionRequirement =
+  | "query_identity"
+  | "product_family_identity"
+  | "medium_or_higher_identity"
+  | "high_confidence_identity"
+  | "provider_ids"
+  | "explicit_live_approval"
+  | "paid_provider_access"
+  | "cache_check"
+  | "guardrail_pass";
+export type SignalExecutionBlockReason =
+  | "explicit_live_approval_required"
+  | "needs_product_identity"
+  | "needs_provider_identity"
+  | "needs_guardrail"
+  | "blocked_by_provider_policy"
+  | "unsupported_capability";
+export type SignalExecutionIdentityMode = "query" | "product_family" | "provider_ids";
+export type SignalExecutionCacheStatus =
+  | ProductResolutionCacheStatus
+  | ProviderIdentityCacheStatus
+  | "not_checked";
+export type SignalExecutionStatus = "planned" | "skipped" | "failed";
+export type SignalExecutionProvenanceMode =
+  | "live"
+  | "mock"
+  | "fallback"
+  | "derived-live"
+  | "derived-mixed";
+export type TrendIQPlannedSignal =
+  | "search_momentum_trends"
+  | "search_volume_google_ads"
+  | "growth_velocity_trends"
+  | "review_quality_google_shopping_aggregate"
+  | "review_quality_google_shopping_reviews";
 
 export type LiveProviderId =
   | "dataforseo_trends"
@@ -194,6 +229,111 @@ export interface ProviderRoutingReport {
   futureExecutionEligibility: Record<FutureExecutionEligibility, ProviderRoute[]>;
   warnings: string[];
   dryRun: true;
+}
+
+export interface SignalExecutionCacheMetadata {
+  cacheable: boolean;
+  cacheKey?: string;
+  cacheStatus: SignalExecutionCacheStatus;
+  ttlPolicy?: string;
+}
+
+export interface SignalExecutionProviderIdentityState {
+  required: boolean;
+  identityMode: SignalExecutionIdentityMode;
+  providerIdFieldsRequired: string[];
+  providerIdFieldsPresent: string[];
+  providerIdsPresent: boolean;
+}
+
+export interface SignalExecutionStep {
+  signal: TrendIQPlannedSignal;
+  capability: LiveDataCapability;
+  provider: LiveProviderId;
+  productId: string;
+  canonicalTitle: string;
+  query: string;
+  aliases: string[];
+  identityMode: SignalExecutionIdentityMode;
+  providerIdentity: SignalExecutionProviderIdentityState;
+  readiness: LiveReadinessStatus;
+  futureExecutionEligibility: FutureExecutionEligibility;
+  executionAllowed: false;
+  blockReason: SignalExecutionBlockReason;
+  routeReason: string;
+  requiredIdentityFields: ProductIdentityRequirement[];
+  missingIdentityFields: ProductIdentityRequirement[];
+  requirements: SignalExecutionRequirement[];
+  dependencies: SignalExecutionRequirement[];
+  cache: SignalExecutionCacheMetadata;
+  estimatedPaidRequest: boolean;
+  estimatedCostCategory: EstimatedCostCategory;
+  warnings: string[];
+}
+
+export interface SignalExecutionPlanSummary {
+  plannedSignals: number;
+  eligible: number;
+  needsIdentity: number;
+  needsGuardrail: number;
+  blocked: number;
+  unsupported: number;
+  paidLiveOperationsPerformed: 0;
+}
+
+export interface SignalExecutionPlan {
+  product: {
+    productId: string;
+    source: ProductProfileSource;
+    canonicalTitle: string;
+    query: string;
+    productType: ProductType;
+    identityConfidence: ProductIdentityConfidence;
+  };
+  routingPlan: ProviderRoutingPlan;
+  steps: SignalExecutionStep[];
+  summary: SignalExecutionPlanSummary;
+  dryRun: true;
+  executionAllowed: false;
+  generatedAt: string;
+  warnings: string[];
+}
+
+export interface SignalExecutionReportRow {
+  signal: TrendIQPlannedSignal;
+  provider: LiveProviderId;
+  readiness: LiveReadinessStatus;
+  identityRequirement: SignalExecutionIdentityMode;
+  futureExecutionEligibility: FutureExecutionEligibility;
+  executionAllowed: false;
+  blockReason: SignalExecutionBlockReason;
+}
+
+export interface SignalExecutionReport {
+  product: SignalExecutionPlan["product"];
+  rows: SignalExecutionReportRow[];
+  summary: SignalExecutionPlanSummary;
+  warnings: string[];
+  dryRun: true;
+}
+
+export interface SignalExecutionResult {
+  provider: LiveProviderId;
+  capability: LiveDataCapability;
+  signal: TrendIQPlannedSignal;
+  status: SignalExecutionStatus;
+  provenance: {
+    mode: SignalExecutionProvenanceMode;
+    provider: LiveProviderId;
+    observedAt: string;
+    notes?: string;
+  };
+  observedAt: string;
+  cacheState: SignalExecutionCacheMetadata;
+}
+
+export interface SignalExecutor {
+  execute(plan: SignalExecutionPlan): Promise<SignalExecutionResult[]>;
 }
 
 export interface ProviderIdentityEvidence {
