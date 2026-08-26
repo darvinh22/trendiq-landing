@@ -123,6 +123,7 @@ function emptyResult(input: {
     httpRequestCount: 0,
     paidLiveOperationsPerformed: 0,
     warnings: input.warnings,
+    signals: [],
   };
 }
 
@@ -342,6 +343,7 @@ function completedResult(input: {
     reportedProviderCost: input.output.reportedProviderCost,
     providerOperationId: input.output.providerOperationId,
     warnings: input.output.warnings ?? [],
+    signals: input.output.signals ?? [],
     metadata: sanitizedMetadata(input.output.metadata),
   };
 }

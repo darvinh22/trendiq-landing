@@ -1,3 +1,5 @@
+import type { NormalizedTrendSignal } from "../types";
+
 export type ProductProfileSource = "catalog" | "user_search" | "resolved_provider";
 export type ProductResolutionSource =
   | "catalog_match"
@@ -357,6 +359,7 @@ export interface SignalExecutionResult {
   reportedProviderCost?: number;
   providerOperationId?: string;
   warnings: string[];
+  signals: NormalizedTrendSignal[];
   metadata?: Record<string, string | number | boolean | null>;
 }
 
@@ -389,6 +392,7 @@ export interface SignalExecutionAdapterOutput {
   reportedProviderCost?: number;
   providerOperationId?: string;
   warnings?: string[];
+  signals?: NormalizedTrendSignal[];
   metadata?: Record<string, string | number | boolean | null | undefined>;
 }
 
