@@ -52,6 +52,28 @@ function providerIdFieldsFor(profile: ProductProfile, provider: LiveProviderId):
     .sort();
 }
 
+function planIdForProfile(profile: ProductProfile, generatedAt: string, locale: string): string {
+  return [
+    "signal-plan",
+    locale.toLowerCase(),
+    profile.productId,
+    profile.canonicalTitle,
+    profile.query,
+    profile.productType ?? "unknown",
+    profile.identityConfidence,
+    generatedAt,
+  ].join(":");
+}
+
+function stepIdForRoute(planId: string, route: ProviderRoute): string {
+  return [
+    planId,
+    route.provider,
+    route.capability,
+    signalForRoute(route),
+  ].join(":");
+}
+
 function signalForRoute(route: ProviderRoute): TrendIQPlannedSignal {
   if (route.provider === "dataforseo_trends" && route.capability === "search") {
     return "search_momentum_trends";
@@ -155,6 +177,7 @@ function requirementsForRoute(
 }
 
 function stepForRoute(input: {
+  planId: string;
   profile: ProductProfile;
   route: ProviderRoute;
   locale: string;
@@ -166,6 +189,8 @@ function stepForRoute(input: {
   const requirements = requirementsForRoute(route, identityMode);
 
   return {
+    planId: input.planId,
+    stepId: stepIdForRoute(input.planId, route),
     signal: signalForRoute(route),
     capability: route.capability,
     provider: route.provider,
@@ -218,8 +243,10 @@ export function buildSignalExecutionPlan(
   const locale = options.locale ?? DEFAULT_PRODUCT_RESOLUTION_LOCALE;
   const routingPlan = options.routingPlan ?? routeProvidersForProfile(profile);
   const generatedAt = (options.now?.() ?? new Date()).toISOString();
+  const planId = planIdForProfile(profile, generatedAt, locale);
   const steps = routingPlan.routes.map((route) =>
     stepForRoute({
+      planId,
       profile,
       route,
       locale,
@@ -228,6 +255,7 @@ export function buildSignalExecutionPlan(
   );
 
   return {
+    planId,
     product: {
       productId: profile.productId,
       source: profile.source,

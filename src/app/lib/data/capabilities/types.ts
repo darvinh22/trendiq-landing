@@ -82,17 +82,28 @@ export type SignalExecutionRequirement =
   | "guardrail_pass";
 export type SignalExecutionBlockReason =
   | "explicit_live_approval_required"
+  | "approval_rejected"
+  | "approval_scope_mismatch"
+  | "plan_step_scope_mismatch"
+  | "execution_state_store_required"
+  | "state_persistence_failed"
+  | "operation_count_invalid"
+  | "operation_budget_exceeded"
+  | "operation_safety_violation"
+  | "duplicate_execution"
+  | "adapter_mismatch"
   | "needs_product_identity"
   | "needs_provider_identity"
   | "needs_guardrail"
   | "blocked_by_provider_policy"
-  | "unsupported_capability";
+  | "unsupported_capability"
+  | "adapter_failed";
 export type SignalExecutionIdentityMode = "query" | "product_family" | "provider_ids";
 export type SignalExecutionCacheStatus =
   | ProductResolutionCacheStatus
   | ProviderIdentityCacheStatus
   | "not_checked";
-export type SignalExecutionStatus = "planned" | "skipped" | "failed";
+export type SignalExecutionStatus = "blocked" | "completed" | "failed";
 export type SignalExecutionProvenanceMode =
   | "live"
   | "mock"
@@ -105,6 +116,7 @@ export type TrendIQPlannedSignal =
   | "growth_velocity_trends"
   | "review_quality_google_shopping_aggregate"
   | "review_quality_google_shopping_reviews";
+export type SignalExecutionStateStatus = "started" | "completed" | "failed";
 
 export type LiveProviderId =
   | "dataforseo_trends"
@@ -247,6 +259,8 @@ export interface SignalExecutionProviderIdentityState {
 }
 
 export interface SignalExecutionStep {
+  planId: string;
+  stepId: string;
   signal: TrendIQPlannedSignal;
   capability: LiveDataCapability;
   provider: LiveProviderId;
@@ -282,6 +296,7 @@ export interface SignalExecutionPlanSummary {
 }
 
 export interface SignalExecutionPlan {
+  planId: string;
   product: {
     productId: string;
     source: ProductProfileSource;
@@ -318,10 +333,16 @@ export interface SignalExecutionReport {
 }
 
 export interface SignalExecutionResult {
+  executionId: string;
+  planId: string;
+  stepId: string;
   provider: LiveProviderId;
   capability: LiveDataCapability;
   signal: TrendIQPlannedSignal;
   status: SignalExecutionStatus;
+  blockReason?: SignalExecutionBlockReason;
+  canonicalProduct: string;
+  query: string;
   provenance: {
     mode: SignalExecutionProvenanceMode;
     provider: LiveProviderId;
@@ -330,10 +351,80 @@ export interface SignalExecutionResult {
   };
   observedAt: string;
   cacheState: SignalExecutionCacheMetadata;
+  operationCount: number;
+  httpRequestCount: number;
+  paidLiveOperationsPerformed: number;
+  reportedProviderCost?: number;
+  providerOperationId?: string;
+  warnings: string[];
+  metadata?: Record<string, string | number | boolean | null>;
 }
 
 export interface SignalExecutor {
   execute(plan: SignalExecutionPlan): Promise<SignalExecutionResult[]>;
+}
+
+export interface SignalExecutionApproval {
+  approved: boolean;
+  executionId: string;
+  planId: string;
+  stepId: string;
+  signal: TrendIQPlannedSignal;
+  provider: LiveProviderId;
+  capability: LiveDataCapability;
+  productId: string;
+  canonicalProduct: string;
+  query: string;
+  approvedAt: string;
+  maxOperations: number;
+}
+
+export interface SignalExecutionAdapterOutput {
+  provenance: SignalExecutionResult["provenance"];
+  observedAt?: string;
+  cacheState?: SignalExecutionCacheMetadata;
+  operationCount?: number;
+  httpRequestCount?: number;
+  paidLiveOperationsPerformed?: number;
+  reportedProviderCost?: number;
+  providerOperationId?: string;
+  warnings?: string[];
+  metadata?: Record<string, string | number | boolean | null | undefined>;
+}
+
+export interface ProviderExecutionAdapter {
+  provider: LiveProviderId;
+  capability: LiveDataCapability;
+  signal: TrendIQPlannedSignal;
+  logicalOperationCount: number;
+  expectedHttpRequestCount: number;
+  execute(input: {
+    step: SignalExecutionStep;
+    approval: SignalExecutionApproval;
+  }): Promise<SignalExecutionAdapterOutput>;
+}
+
+export interface SignalExecutionState {
+  executionId: string;
+  planId: string;
+  stepId: string;
+  provider: LiveProviderId;
+  capability: LiveDataCapability;
+  signal: TrendIQPlannedSignal;
+  status: SignalExecutionStateStatus;
+  startedAt: string;
+  completedAt?: string;
+  operationCount: number;
+}
+
+export interface SignalExecutionStateStore {
+  get(executionId: string): Promise<SignalExecutionState | undefined>;
+  reserveStarted(state: SignalExecutionState): Promise<{
+    reserved: boolean;
+    existing?: SignalExecutionState;
+  }>;
+  setCompleted(state: SignalExecutionState): Promise<void>;
+  setFailed(state: SignalExecutionState): Promise<void>;
 }
 
 export interface ProviderIdentityEvidence {
