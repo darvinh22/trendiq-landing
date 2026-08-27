@@ -18,6 +18,26 @@ export type ProductType =
   | "unknown";
 
 export type ProductIdentityConfidence = "high" | "medium" | "low";
+export type ProductMeasurementQueryCandidateKind =
+  | "exact"
+  | "model"
+  | "product_family"
+  | "alias";
+export type ProductMeasurementQuerySourceField =
+  | "query"
+  | "canonicalTitle"
+  | "brand"
+  | "modelGeneration"
+  | "aliases";
+
+export interface ProductMeasurementQueryCandidate {
+  query: string;
+  kind: ProductMeasurementQueryCandidateKind;
+  sourceFields: ProductMeasurementQuerySourceField[];
+  confidence: ProductIdentityConfidence;
+  currentlyExecutable: boolean;
+  rank: number;
+}
 
 export type LiveDataCapability =
   | "search"
@@ -163,6 +183,7 @@ export interface ProductProfile {
   category?: string;
   modelGeneration?: string;
   identityConfidence: ProductIdentityConfidence;
+  measurementQueries?: ProductMeasurementQueryCandidate[];
   providerIds?: Record<string, unknown>;
   guardrails?: ProductIdentityGuardrails;
 }
@@ -232,6 +253,7 @@ export interface ProviderRoutingReport {
     canonicalTitle: string;
     productType: ProductType;
     identityConfidence: ProductIdentityConfidence;
+    measurementQueries?: ProductMeasurementQueryCandidate[];
   };
   type: ProductType;
   identityConfidence: ProductIdentityConfidence;
@@ -306,6 +328,7 @@ export interface SignalExecutionPlan {
     query: string;
     productType: ProductType;
     identityConfidence: ProductIdentityConfidence;
+    measurementQueries?: ProductMeasurementQueryCandidate[];
   };
   routingPlan: ProviderRoutingPlan;
   steps: SignalExecutionStep[];

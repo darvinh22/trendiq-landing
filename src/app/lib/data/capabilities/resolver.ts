@@ -7,6 +7,7 @@ import {
 } from "./cacheContracts";
 import { buildDynamicProductReadinessReport } from "./evaluator";
 import { VALIDATION_PRODUCT_PROFILES, inferBrand, inferProductType } from "./profiles";
+import { withMeasurementQueryCandidates } from "./queryMeasurement";
 import type {
   ProductIdentityConfidence,
   ProductIdentityGuardrails,
@@ -273,7 +274,7 @@ export function buildProductProfileFromResolution(resolution: ProductResolution)
     ? VALIDATION_PRODUCT_PROFILES[resolution.matchedCatalogProductId]
     : undefined;
 
-  return {
+  const profile: ProductProfile = {
     productId: matchedProfile?.productId ?? `user-search-${slugify(resolution.canonicalTitle)}`,
     source: matchedProfile ? "catalog" : "user_search",
     query: resolution.normalizedQuery,
@@ -287,6 +288,8 @@ export function buildProductProfileFromResolution(resolution: ProductResolution)
     providerIds: matchedProfile?.providerIds,
     guardrails: guardrailsFromResolution(resolution),
   };
+
+  return withMeasurementQueryCandidates(profile);
 }
 
 function expiresAtForConfidence(
@@ -319,7 +322,7 @@ export async function resolveProductQuery(
       const expired = Date.parse(cached.expiresAt) <= now.getTime();
       if (!expired) {
         const resolution = cachedResolution(cached);
-        const profile = cached.profile;
+        const profile = withMeasurementQueryCandidates(cached.profile);
 
         return {
           resolution,

@@ -294,6 +294,7 @@ export function buildProviderRoutingReport(
       canonicalTitle: profile.canonicalTitle,
       productType,
       identityConfidence: profile.identityConfidence,
+      measurementQueries: profile.measurementQueries,
     },
     type: productType,
     identityConfidence: profile.identityConfidence,

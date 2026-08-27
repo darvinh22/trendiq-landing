@@ -263,6 +263,7 @@ export function buildSignalExecutionPlan(
       query: profile.query,
       productType: productType(profile),
       identityConfidence: profile.identityConfidence,
+      measurementQueries: profile.measurementQueries,
     },
     routingPlan,
     steps,

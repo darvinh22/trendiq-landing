@@ -2,6 +2,7 @@ export * from "./cacheContracts";
 export * from "./evaluator";
 export * from "./identityDiscovery";
 export * from "./profiles";
+export * from "./queryMeasurement";
 export * from "./resolver";
 export * from "./router";
 export * from "./signalExecutor";

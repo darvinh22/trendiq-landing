@@ -175,6 +175,13 @@ describe("controlled live search-to-score pipeline", () => {
     expect(client.calls).toHaveLength(1);
     expect(client.calls[0].productId).toBe("user-search-garmin-venu-4");
     expect(client.calls[0].aliases).toEqual(["Garmin Venu 4"]);
+    expect(result.plan.product.measurementQueries?.map((candidate) => candidate.query)).toEqual([
+      "Garmin Venu 4",
+      "Venu 4",
+      "Garmin Venu",
+    ]);
+    expect(client.calls[0].aliases).not.toContain("Venu 4");
+    expect(client.calls[0].aliases).not.toContain("Garmin Venu");
     expect(execution.status).toBe("completed");
     expect(execution.operationCount).toBe(1);
     expect(execution.paidLiveOperationsPerformed).toBe(1);

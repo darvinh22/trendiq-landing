@@ -1,4 +1,5 @@
 import { RAY_BAN_META_PRODUCT_ID } from "../mockProviderSignals";
+import { withMeasurementQueryCandidates } from "./queryMeasurement";
 import type {
   ProductIdentityConfidence,
   ProductIdentityGuardrails,
@@ -84,7 +85,7 @@ export function createUserSearchProductProfile(
   const canonicalTitle = overrides.canonicalTitle ?? cleanedQuery;
   const productType = overrides.productType ?? inferProductType({ query: cleanedQuery });
 
-  return {
+  const profile: ProductProfile = {
     productId: overrides.productId ?? `user-search-${slugify(cleanedQuery)}`,
     source: overrides.source ?? "user_search",
     query: cleanedQuery,
@@ -98,6 +99,8 @@ export function createUserSearchProductProfile(
     providerIds: overrides.providerIds,
     guardrails: overrides.guardrails,
   };
+
+  return withMeasurementQueryCandidates(profile);
 }
 
 export function buildProductProfileFromCatalogProduct(
@@ -112,7 +115,7 @@ export function buildProductProfileFromCatalogProduct(
     category: product.category,
   });
 
-  return {
+  const profile: ProductProfile = {
     productId: overrides.productId ?? product.id,
     source: overrides.source ?? "catalog",
     query: canonicalTitle,
@@ -126,6 +129,8 @@ export function buildProductProfileFromCatalogProduct(
     providerIds: overrides.providerIds,
     guardrails: overrides.guardrails,
   };
+
+  return withMeasurementQueryCandidates(profile);
 }
 
 export function profileWithProviderIds(
