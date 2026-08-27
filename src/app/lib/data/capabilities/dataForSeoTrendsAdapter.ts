@@ -139,12 +139,10 @@ export function createDataForSeoTrendsExecutionAdapter(
         now: now(),
         minSampleSize,
       });
-      const signals = result.summary.hasSufficientData
-        ? filterAndAnnotateSignals({ result, approval, allowedProducedSignals })
-        : [];
+      const signals = filterAndAnnotateSignals({ result, approval, allowedProducedSignals });
       const warnings = [
         ...(!result.summary.hasSufficientData
-          ? ["DataForSEO Trends returned insufficient current/previous 7-day coverage; no normalized signals were emitted."]
+          ? ["DataForSEO Trends returned insufficient evidence for supported 7-day percent-change scoring signals."]
           : []),
         ...(signals.length < result.signals.length
           ? ["DataForSEO Trends signals outside the explicitly approved planned signal scope were not emitted."]
@@ -172,12 +170,23 @@ export function createDataForSeoTrendsExecutionAdapter(
           producedSignals: emittedSignalSummary(signals),
           emittedSignalCount: signals.length,
           hasSufficientData: result.summary.hasSufficientData,
+          evidenceQuality: result.summary.evidenceQuality,
+          current7dEvidenceQuality: result.summary.current7dEvidenceQuality,
+          previous7dEvidenceQuality: result.summary.previous7dEvidenceQuality,
+          prior7dEvidenceQuality: result.summary.prior7dEvidenceQuality,
+          change7dEvidenceQuality: result.summary.change7dEvidenceQuality,
+          previous7dChangeEvidenceQuality: result.summary.previous7dChangeEvidenceQuality,
+          accelerationEvidenceQuality: result.summary.accelerationEvidenceQuality,
           aliasesUsed: result.summary.aliasesUsed.join(","),
           queriesMatched: result.summary.queriesMatched,
           current7dInterest: result.summary.current7dInterest,
           previous7dInterest: result.summary.previous7dInterest,
           change7dPercent: result.summary.change7dPercent,
           observationCount: result.summary.observationCount,
+          missingValueCount: result.summary.missingValueCount,
+          current7dObservedValueCount: result.summary.current7dObservedValueCount,
+          previous7dObservedValueCount: result.summary.previous7dObservedValueCount,
+          prior7dObservedValueCount: result.summary.prior7dObservedValueCount,
           aliasCoveragePercent: result.summary.aliasCoveragePercent,
         },
       };

@@ -62,6 +62,47 @@ function fixtureSeries(input: {
   };
 }
 
+function sparseCurrentZeroSeries(input: {
+  productId: string;
+  aliases: string[];
+  locationCode: number;
+  interestType: SearchInterestType;
+  timeRange: SearchInterestTimeRange;
+}): SearchInterestSeries {
+  const previous = Array.from({ length: 7 }, (_, index) => {
+    const date = isoDate(-13 + index);
+
+    return {
+      dateFrom: date,
+      dateTo: date,
+      timestamp: Date.parse(`${date}T00:00:00.000Z`) / 1000,
+      valuesByAlias: Object.fromEntries(input.aliases.map((alias) => [alias, 50])),
+    };
+  });
+  const currentDate = isoDate(0);
+
+  return {
+    provider: "dataforseo",
+    productId: input.productId,
+    aliases: input.aliases,
+    locationCode: input.locationCode,
+    interestType: input.interestType,
+    timeRange: input.timeRange,
+    fetchedAt: now.toISOString(),
+    cost: 0.0012,
+    points: [
+      ...previous,
+      {
+        dateFrom: currentDate,
+        dateTo: currentDate,
+        timestamp: Date.parse(`${currentDate}T00:00:00.000Z`) / 1000,
+        valuesByAlias: Object.fromEntries(input.aliases.map((alias) => [alias, 0])),
+      },
+    ],
+    averagesByAlias: Object.fromEntries(input.aliases.map((alias) => [alias, 42])),
+  };
+}
+
 class FixtureTrendsClient implements SearchInterestClient {
   readonly calls: Array<{
     productId: string;
@@ -71,6 +112,8 @@ class FixtureTrendsClient implements SearchInterestClient {
     timeRange: SearchInterestTimeRange;
   }> = [];
 
+  constructor(private readonly buildSeries = fixtureSeries) {}
+
   async getSearchInterest(input: {
     productId: string;
     aliases: string[];
@@ -79,7 +122,7 @@ class FixtureTrendsClient implements SearchInterestClient {
     timeRange: SearchInterestTimeRange;
   }): Promise<SearchInterestSeries> {
     this.calls.push(input);
-    return fixtureSeries(input);
+    return this.buildSeries(input);
   }
 }
 
@@ -246,6 +289,33 @@ describe("controlled live search-to-score pipeline", () => {
       approvalStatus: "pending",
       liveApiRequestMade: false,
     });
+  });
+
+  it("does not score sparse zero Trends evidence as a confirmed live decline", async () => {
+    const client = new FixtureTrendsClient(sparseCurrentZeroSeries);
+    const result = await runControlledLiveSearchToScore({
+      query: "Garmin Venu 4",
+      searchClient: client,
+      searchConfig: searchConfig(),
+      stateStore: new InMemorySignalExecutionStateStore(),
+      now: () => now,
+      approve: ({ plan, trendsSteps }) => approvalsFor(plan, trendsSteps),
+    });
+    const execution = result.executionResults[0];
+
+    expect(execution.status).toBe("completed");
+    expect(execution.operationCount).toBe(1);
+    expect(execution.paidLiveOperationsPerformed).toBe(1);
+    expect(execution.metadata?.current7dEvidenceQuality).toBe("sparse");
+    expect(execution.metadata?.change7dEvidenceQuality).toBe("sparse");
+    expect(execution.metadata?.hasSufficientData).toBe(false);
+    expect(result.rawSignals.some((signal) => signal.value === -100)).toBe(false);
+    expect(result.rawSignals.some((signal) => signal.metadata?.engineField === "searchGrowthPercent")).toBe(false);
+    expect(result.rawSignals.some((signal) => signal.metadata?.engineField === "trendChangePercent")).toBe(false);
+    expect(result.rawSignals.some((signal) => signal.metadata?.engineField === "accelerationPercent")).toBe(false);
+    expect(result.snapshot.aggregatedSignals.searchMomentum.searchGrowthPercent).toBe(0);
+    expect(result.snapshot.aggregatedSignals.growthVelocity.trendChangePercent).toBe(0);
+    expect(result.snapshot.aggregatedSignals.growthVelocity.searchDerivedTrendChangePercent).toBeUndefined();
   });
 
   it("keeps the controlled executor provider-agnostic while the Trends adapter owns provider imports", () => {

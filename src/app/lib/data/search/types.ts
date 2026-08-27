@@ -3,6 +3,7 @@ import type { ProductProfile } from "../capabilities";
 
 export type SearchProviderMode = "mock" | "live";
 export type SearchProviderVendor = "dataforseo";
+export type SearchEvidenceQuality = "observed" | "sparse" | "insufficient" | "missing";
 export type SearchInterestType = "web" | "news" | "ecommerce";
 export type SearchInterestTimeRange =
   | "past_4_hours"
@@ -40,11 +41,21 @@ export interface SearchInterestWindow {
   dateTo: string;
 }
 
+export interface SearchInterestWindowObservation {
+  interest?: number;
+  pointCount: number;
+  observedValueCount: number;
+  missingValueCount: number;
+  zeroValueCount: number;
+  positiveValueCount: number;
+  evidenceQuality: SearchEvidenceQuality;
+}
+
 export interface SearchInterestPoint {
   dateFrom: string;
   dateTo: string;
   timestamp: number;
-  valuesByAlias: Record<string, number>;
+  valuesByAlias: Record<string, number | null>;
   missingData?: boolean;
 }
 
@@ -58,7 +69,7 @@ export interface SearchInterestSeries {
   fetchedAt: string;
   cost?: number;
   points: SearchInterestPoint[];
-  averagesByAlias: Record<string, number>;
+  averagesByAlias: Record<string, number | null>;
 }
 
 export interface SearchVolumeMonthlyPoint {
@@ -96,10 +107,10 @@ export interface SearchSignalSummary {
   timestamp: string;
   aliasesUsed: string[];
   queriesMatched: number;
-  current7dInterest: number;
-  previous7dInterest: number;
+  current7dInterest?: number;
+  previous7dInterest?: number;
   prior7dInterest?: number;
-  change7dPercent: number;
+  change7dPercent?: number;
   previous7dChangePercent?: number;
   current30dInterest?: number;
   previous30dInterest?: number;
@@ -109,6 +120,17 @@ export interface SearchSignalSummary {
   baselineReadiness: number;
   lowBaseGrowth: boolean;
   observationCount: number;
+  missingValueCount: number;
+  current7dObservedValueCount: number;
+  previous7dObservedValueCount: number;
+  prior7dObservedValueCount: number;
+  current7dEvidenceQuality: SearchEvidenceQuality;
+  previous7dEvidenceQuality: SearchEvidenceQuality;
+  prior7dEvidenceQuality: SearchEvidenceQuality;
+  change7dEvidenceQuality: SearchEvidenceQuality;
+  previous7dChangeEvidenceQuality?: SearchEvidenceQuality;
+  accelerationEvidenceQuality?: SearchEvidenceQuality;
+  evidenceQuality: SearchEvidenceQuality;
   aliasCoveragePercent: number;
   freshnessHours: number;
   confidence: number;

@@ -109,6 +109,59 @@ describe("DataForSeoTrendsClient", () => {
     expect(series.averagesByAlias["Ray-Ban Meta"]).toBe(22);
   });
 
+  it("preserves Trends per-alias missingness without coercing it to zero", () => {
+    const series = mapDataForSeoTrendsResponse({
+      response: {
+        ...fixtureResponse(),
+        tasks: [
+          {
+            status_code: 20000,
+            status_message: "Ok.",
+            cost: 0.0012,
+            result: [
+              {
+                keywords: ["Ray-Ban Meta", "Ray Ban Meta", "Meta smart glasses"],
+                location_code: 2840,
+                items: [
+                  {
+                    type: "dataforseo_trends_graph",
+                    keywords: ["Ray-Ban Meta", "Ray Ban Meta", "Meta smart glasses"],
+                    averages: [0, Number.NaN],
+                    data: [
+                      {
+                        date_from: "2026-07-13",
+                        date_to: "2026-07-13",
+                        timestamp: 1783900800,
+                        values: [0, Number.NaN],
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      productId: "ray-ban-meta",
+      aliases: ["Ray-Ban Meta", "Ray Ban Meta", "Meta smart glasses"],
+      locationCode: 2840,
+      interestType: "web",
+      timeRange: "past_30_days",
+      fetchedAt: "2026-08-12T00:00:00.000Z",
+    });
+
+    expect(series.points[0].valuesByAlias).toEqual({
+      "Ray-Ban Meta": 0,
+      "Ray Ban Meta": null,
+      "Meta smart glasses": null,
+    });
+    expect(series.averagesByAlias).toEqual({
+      "Ray-Ban Meta": 0,
+      "Ray Ban Meta": null,
+      "Meta smart glasses": null,
+    });
+  });
+
   it("uses the DataForSEO Trends endpoint and not the Google Trends endpoint", async () => {
     const calls: Array<{ url: string; auth?: string; body?: string }> = [];
     const fetchImpl: FetchLike = async (url, init) => {

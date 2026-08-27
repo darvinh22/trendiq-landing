@@ -4,11 +4,17 @@ import {
   calculateBaselineReadiness,
   isLowBaseSearchGrowth,
 } from "../../scoring/searchQuality";
-import type { SearchInterestPoint, SearchInterestWindow } from "./types";
+import type {
+  SearchEvidenceQuality,
+  SearchInterestPoint,
+  SearchInterestWindow,
+  SearchInterestWindowObservation,
+} from "./types";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const AVERAGE_MONTH_DAYS = 30.4375;
 const SEARCH_VOLUME_ESTIMATE_DAYS = 7;
+const DEFAULT_MIN_WINDOW_OBSERVED_VALUES = 1;
 
 export function formatSearchDate(date: Date): string {
   return date.toISOString().slice(0, 10);
@@ -63,34 +69,85 @@ function parsePointStart(point: SearchInterestPoint): number {
 }
 
 function average(values: number[]): number {
-  if (!values.length) return 0;
   return roundTo(values.reduce((sum, value) => sum + value, 0) / values.length, 2);
 }
 
-function pointAverage(point: SearchInterestPoint): number {
-  const values = Object.values(point.valuesByAlias).filter((value) => Number.isFinite(value));
+function finiteValues(point: SearchInterestPoint): number[] {
+  return Object.values(point.valuesByAlias)
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+}
+
+function pointAverage(point: SearchInterestPoint): number | undefined {
+  const values = finiteValues(point);
+  if (!values.length) return undefined;
   return average(values);
 }
 
-export function calculatePercentChange(current: number, previous: number): number {
+function evidenceQualityForWindow(
+  observedValueCount: number,
+  minObservedValues: number
+): SearchEvidenceQuality {
+  if (observedValueCount <= 0) return "missing";
+  if (observedValueCount < minObservedValues) return "sparse";
+  return "observed";
+}
+
+export function calculatePercentChange(current: number, previous: number): number;
+export function calculatePercentChange(
+  current: number | undefined,
+  previous: number | undefined
+): number | undefined;
+export function calculatePercentChange(
+  current: number | undefined,
+  previous: number | undefined
+): number | undefined {
+  if (
+    typeof current !== "number" ||
+    typeof previous !== "number" ||
+    !Number.isFinite(current) ||
+    !Number.isFinite(previous)
+  ) {
+    return undefined;
+  }
+
   if (previous <= 0) return current > 0 ? 100 : 0;
   return roundTo(((current - previous) / Math.abs(previous)) * 100, 1);
 }
 
 export function averageSearchInterestForWindow(
   points: SearchInterestPoint[],
-  window: SearchInterestWindow
-): { interest: number; pointCount: number } {
+  window: SearchInterestWindow,
+  options: { minObservedValues?: number } = {}
+): SearchInterestWindowObservation {
   const startMs = Date.parse(`${window.dateFrom}T00:00:00.000Z`);
   const endMs = Date.parse(`${window.dateTo}T23:59:59.999Z`);
-  const scoped = points.filter((point) => {
+  const minObservedValues = options.minObservedValues ?? DEFAULT_MIN_WINDOW_OBSERVED_VALUES;
+  const windowPoints = points.filter((point) => {
     const pointMidpoint = parsePointMidpoint(point);
-    return Number.isFinite(pointMidpoint) && pointMidpoint >= startMs && pointMidpoint <= endMs && !point.missingData;
+    return Number.isFinite(pointMidpoint) && pointMidpoint >= startMs && pointMidpoint <= endMs;
   });
+  const scoped = windowPoints.filter((point) => !point.missingData);
+  const values = scoped.flatMap(finiteValues);
+  const pointAverages = scoped
+    .map(pointAverage)
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  const missingValueCount = windowPoints.reduce((sum, point) => {
+    const valuesByAlias = Object.values(point.valuesByAlias);
+    if (point.missingData) return sum + valuesByAlias.length;
+
+    return sum + valuesByAlias
+      .filter((value) => typeof value !== "number" || !Number.isFinite(value))
+      .length;
+  }, 0);
 
   return {
-    interest: average(scoped.map(pointAverage)),
+    ...(pointAverages.length ? { interest: average(pointAverages) } : {}),
     pointCount: scoped.length,
+    observedValueCount: values.length,
+    missingValueCount,
+    zeroValueCount: values.filter((value) => value === 0).length,
+    positiveValueCount: values.filter((value) => value > 0).length,
+    evidenceQuality: evidenceQualityForWindow(values.length, minObservedValues),
   };
 }
 
@@ -116,7 +173,11 @@ export function calculateTrailingDailyGrowthStreak(
       dateMs: parsePointStart(point),
       interest: pointAverage(point),
     }))
-    .filter((point) => Number.isFinite(point.dateMs) && Number.isFinite(point.interest))
+    .filter((point): point is { dateMs: number; interest: number } =>
+      Number.isFinite(point.dateMs) &&
+      typeof point.interest === "number" &&
+      Number.isFinite(point.interest)
+    )
     .sort((a, b) => a.dateMs - b.dateMs);
   const latestIndex = scoped.findLastIndex((point) => point.dateMs >= startMs && point.dateMs <= endMs);
   if (latestIndex < 0) return 0;
@@ -136,7 +197,10 @@ export function calculateAliasCoveragePercent(points: SearchInterestPoint[], ali
   if (!aliases.length) return 0;
 
   const aliasesWithData = aliases.filter((alias) =>
-    points.some((point) => Number.isFinite(point.valuesByAlias[alias]) && point.valuesByAlias[alias] > 0)
+    points.some((point) => {
+      const value = point.valuesByAlias[alias];
+      return typeof value === "number" && Number.isFinite(value) && value > 0;
+    })
   ).length;
 
   return roundTo(normalizeRatio(aliasesWithData, aliases.length), 1);

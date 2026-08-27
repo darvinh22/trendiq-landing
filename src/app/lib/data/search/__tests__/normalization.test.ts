@@ -54,10 +54,69 @@ describe("search normalization", () => {
     expect(averageSearchInterestForWindow(points, windows.current7d)).toEqual({
       interest: 69,
       pointCount: 1,
+      observedValueCount: 2,
+      missingValueCount: 0,
+      zeroValueCount: 0,
+      positiveValueCount: 2,
+      evidenceQuality: "observed",
     });
     expect(averageSearchInterestForWindow(points, windows.previous7d)).toEqual({
       interest: 41,
       pointCount: 1,
+      observedValueCount: 2,
+      missingValueCount: 0,
+      zeroValueCount: 0,
+      positiveValueCount: 2,
+      evidenceQuality: "observed",
+    });
+  });
+
+  it("keeps explicit zero distinct from missing alias values", () => {
+    const windows = buildSearchWindows(new Date("2026-08-12T00:00:00.000Z"));
+    const observation = averageSearchInterestForWindow([
+      {
+        dateFrom: "2026-08-06",
+        dateTo: "2026-08-12",
+        timestamp: 1785974400,
+        valuesByAlias: {
+          "Ray-Ban Meta": 0,
+          "Ray Ban Meta": null,
+        },
+      },
+    ], windows.current7d, { minObservedValues: 2 });
+
+    expect(observation).toEqual({
+      interest: 0,
+      pointCount: 1,
+      observedValueCount: 1,
+      missingValueCount: 1,
+      zeroValueCount: 1,
+      positiveValueCount: 0,
+      evidenceQuality: "sparse",
+    });
+  });
+
+  it("does not convert empty or provider-missing windows into meaningful zero", () => {
+    const windows = buildSearchWindows(new Date("2026-08-12T00:00:00.000Z"));
+    const observation = averageSearchInterestForWindow([
+      {
+        dateFrom: "2026-08-06",
+        dateTo: "2026-08-12",
+        timestamp: 1785974400,
+        valuesByAlias: {
+          "Ray-Ban Meta": 44,
+        },
+        missingData: true,
+      },
+    ], windows.current7d);
+
+    expect(observation).toEqual({
+      pointCount: 0,
+      observedValueCount: 0,
+      missingValueCount: 1,
+      zeroValueCount: 0,
+      positiveValueCount: 0,
+      evidenceQuality: "missing",
     });
   });
 

@@ -210,10 +210,10 @@ function createDataForSeoErrorMessage(httpStatus: number, diagnostics: DataForSe
     : `DataForSEO request failed with HTTP ${httpStatus}`;
 }
 
-function mapValuesByAlias(aliases: string[], values: number[] | undefined): Record<string, number> {
-  return aliases.reduce<Record<string, number>>((mapped, alias, index) => {
+function mapValuesByAlias(aliases: string[], values: number[] | undefined): Record<string, number | null> {
+  return aliases.reduce<Record<string, number | null>>((mapped, alias, index) => {
     const value = values?.[index];
-    mapped[alias] = Number.isFinite(value) ? Number(value) : 0;
+    mapped[alias] = typeof value === "number" && Number.isFinite(value) ? Number(value) : null;
     return mapped;
   }, {});
 }
