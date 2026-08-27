@@ -5,6 +5,7 @@ import {
   type SignalExecutionPlan,
   type SignalExecutionStep,
 } from "../capabilities";
+import { createDataForSeoTrendsExecutionAdapter } from "../capabilities/dataForSeoTrendsAdapter";
 import {
   createScopedSignalExecutionApproval,
   runControlledLiveSearchToScore,
@@ -220,6 +221,12 @@ describe("controlled live search-to-score pipeline", () => {
       approve: ({ plan, trendsSteps }) => approvalsFor(plan, trendsSteps),
     });
     const execution = result.executionResults[0];
+    const adapter = createDataForSeoTrendsExecutionAdapter({
+      step: result.primaryStep,
+      client,
+      config: searchConfig(),
+      now: () => now,
+    });
     const sources = result.snapshot.provenance.sources.map((source) => source.source);
     const detailedReviews = result.plan.steps.find((step) =>
       step.provider === "dataforseo_google_shopping_reviews"
@@ -232,6 +239,8 @@ describe("controlled live search-to-score pipeline", () => {
     expect(client.calls).toHaveLength(1);
     expect(client.calls[0].productId).toBe("user-search-garmin-venu-4");
     expect(client.calls[0].aliases).toEqual(["Garmin Venu 4"]);
+    expect(adapter.logicalOperationCount).toBe(1);
+    expect(adapter.expectedHttpRequestCount).toBe(1);
     expect(result.plan.product.measurementQueries?.map((candidate) => candidate.query)).toEqual([
       "Garmin Venu 4",
       "Venu 4",
@@ -241,9 +250,13 @@ describe("controlled live search-to-score pipeline", () => {
     expect(client.calls[0].aliases).not.toContain("Garmin Venu");
     expect(execution.status).toBe("completed");
     expect(execution.operationCount).toBe(1);
+    expect(execution.httpRequestCount).toBe(1);
     expect(execution.paidLiveOperationsPerformed).toBe(1);
+    expect(execution.reportedProviderCost).toBe(0.0012);
     expect(result.rawSignals.some((signal) => signal.signalType === "searchMomentum")).toBe(true);
     expect(result.rawSignals.some((signal) => signal.signalType === "growthVelocity")).toBe(true);
+    expect(result.rawSignals.length).toBeGreaterThan(1);
+    expect(result.rawSignals.every((signal) => signal.metadata?.sourceCost === 0.0012)).toBe(true);
     expect(result.rawSignals.every((signal) => signal.source !== "reddit")).toBe(true);
     expect(result.rawSignals.every((signal) => signal.sourceProvenance.provider === "dataforseo_trends")).toBe(true);
     expect(result.rawSignals.every((signal) => signal.sourceProvenance.approvalStatus === "approved")).toBe(true);

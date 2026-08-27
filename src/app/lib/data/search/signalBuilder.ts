@@ -36,11 +36,18 @@ function calculateFreshnessHours(series: SearchInterestSeries, now: Date): numbe
   return Math.max(0, Math.round((now.getTime() - fetchedAtMs) / 3600000));
 }
 
-function buildMetadata(summary: SearchSignalSummary) {
+function providerCostMetadata(cost: number | undefined) {
+  return typeof cost === "number" && Number.isFinite(cost)
+    ? { sourceCost: cost }
+    : {};
+}
+
+function buildMetadata(summary: SearchSignalSummary, sourceCost?: number) {
   return {
     provider: "dataforseo_trends",
     sourceName: "DataForSEO Trends API",
     sourceMetric: "Search Interest",
+    ...providerCostMetadata(sourceCost),
     aliasesUsed: summary.aliasesUsed.join(", "),
     queriesMatched: summary.queriesMatched,
     sampleSize: summary.observationCount,
@@ -279,7 +286,7 @@ export function buildSearchSignalsFromSeries(input: {
       previous30d: windows.previous30d,
     },
   };
-  const metadata = buildMetadata(summary);
+  const metadata = buildMetadata(summary, input.series.cost);
   const signals: NormalizedTrendSignal[] = [];
 
   if (hasFiniteInterest(current7d) && current7d.evidenceQuality === "observed") {

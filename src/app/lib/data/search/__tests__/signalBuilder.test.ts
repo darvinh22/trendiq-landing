@@ -17,7 +17,7 @@ function point(dateFrom: string, dateTo: string, values: Array<number | null>): 
   };
 }
 
-function series(points: SearchInterestPoint[]): SearchInterestSeries {
+function series(points: SearchInterestPoint[], cost?: number): SearchInterestSeries {
   return {
     provider: "dataforseo",
     productId: "ray-ban-meta",
@@ -26,6 +26,7 @@ function series(points: SearchInterestPoint[]): SearchInterestSeries {
     interestType: "web",
     timeRange: "past_30_days",
     fetchedAt: now.toISOString(),
+    ...(typeof cost === "number" ? { cost } : {}),
     points,
     averagesByAlias: {},
   };
@@ -65,15 +66,15 @@ const diagnosticValues: Array<[string, number]> = [
   ["2026-08-12", 1],
 ];
 
-function diagnosticSeries(): SearchInterestSeries {
-  return series(diagnosticValues.map(([date, value]) => point(date, date, [value])));
+function diagnosticSeries(cost?: number): SearchInterestSeries {
+  return series(diagnosticValues.map(([date, value]) => point(date, date, [value])), cost);
 }
 
 describe("search signal builder", () => {
   it("builds Search Interest signals for search momentum and growth velocity", () => {
     const result = buildSearchSignalsFromSeries({
       productId: "ray-ban-meta",
-      series: diagnosticSeries(),
+      series: diagnosticSeries(0.0012),
       now,
       minSampleSize: 2,
     });
@@ -114,7 +115,22 @@ describe("search signal builder", () => {
       expect(signal.normalizedValue).toBeGreaterThanOrEqual(0);
       expect(signal.normalizedValue).toBeLessThanOrEqual(100);
       expect(signal.metadata?.provider).toBe("dataforseo_trends");
+      expect(signal.metadata?.sourceCost).toBe(0.0012);
       expect(signal.metadata?.aliasesUsed).toContain("Ray-Ban Meta");
+    }
+  });
+
+  it("does not fabricate source cost when Trends provider cost is missing", () => {
+    const result = buildSearchSignalsFromSeries({
+      productId: "ray-ban-meta",
+      series: diagnosticSeries(),
+      now,
+      minSampleSize: 2,
+    });
+
+    expect(result.signals.length).toBeGreaterThan(1);
+    for (const signal of result.signals) {
+      expect(signal.metadata).not.toHaveProperty("sourceCost");
     }
   });
 
