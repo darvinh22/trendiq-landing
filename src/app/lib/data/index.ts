@@ -9,6 +9,7 @@ export * from "./provenanceReport";
 export * from "./reddit";
 export * from "./reviews";
 export * from "./search";
+export * from "./searchMomentum";
 export * from "./signalAggregator";
 export * from "./snapshotEngine";
 export * from "./snapshotStore";

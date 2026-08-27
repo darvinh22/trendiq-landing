@@ -6,6 +6,7 @@ import type {
   TrendIQScoreResult,
   TrendIQSignalInputs,
   TrendMomentumResult,
+  TrendStatus,
 } from "../scoring/types";
 
 export type TrendIQDataSource =
@@ -166,6 +167,55 @@ export interface TrendIQSnapshotProvenanceSummary {
   reddit: RedditProvenanceStatus;
 }
 
+export type SearchMomentumStrength = "Low" | "Medium" | "High";
+export type SearchAbsoluteDemandLevel = "Very Low" | "Low" | "Medium" | "High" | "Very High";
+export type SearchMomentumBaselineQuality = "weak" | "moderate" | "strong";
+export type SearchMomentumEvidenceQuality = "observed" | "sparse" | "insufficient" | "missing";
+export type SearchMomentumMeasurementScope = "exact";
+
+export interface SearchMomentumAbsoluteDemand {
+  source: "dataforseo_google_ads";
+  provenance: SignalSourceProvenanceMode;
+  monthlySearchVolume?: number;
+  searchVolume7d?: number;
+  normalizedDemandScore: number;
+  level: SearchAbsoluteDemandLevel;
+  strength: SearchMomentumStrength;
+  confidence: number;
+  evidenceQuality: SearchMomentumEvidenceQuality;
+}
+
+export interface SearchMomentumDirectionalDemand {
+  source: "dataforseo_trends";
+  provenance: SignalSourceProvenanceMode;
+  current7dRelativeInterest?: number;
+  previous7dRelativeInterest?: number;
+  searchGrowthPercent?: number;
+  trendChangePercent?: number;
+  accelerationPercent?: number;
+  consecutiveGrowthDays?: number;
+  direction: TrendStatus;
+  confidence: number;
+  evidenceQuality: SearchMomentumEvidenceQuality;
+  baselineReadiness: number;
+  baselineQuality: SearchMomentumBaselineQuality;
+}
+
+export interface SearchMomentumV1 {
+  version: "search_momentum_v1";
+  direction: TrendStatus;
+  strength: SearchMomentumStrength;
+  confidence: number;
+  evidenceQuality: SearchMomentumEvidenceQuality;
+  absoluteDemand?: SearchMomentumAbsoluteDemand;
+  directionalDemand?: SearchMomentumDirectionalDemand;
+  provenance: {
+    measurementScope: SearchMomentumMeasurementScope;
+    query?: string;
+    sources: string[];
+  };
+}
+
 export interface ProductTrendSnapshot {
   productId: string;
   timestamp: string;
@@ -177,6 +227,7 @@ export interface ProductTrendSnapshot {
   trendStatus: TrendMomentumResult;
   provenance: DataProvenanceSummary;
   liveDataAudit?: TrendIQSnapshotProvenanceSummary;
+  searchMomentumV1?: SearchMomentumV1;
 }
 
 export interface HistoricalTrendSnapshot {

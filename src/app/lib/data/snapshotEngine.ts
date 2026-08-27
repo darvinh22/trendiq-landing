@@ -5,6 +5,7 @@ import { DATA_LAYER_TIMESTAMP } from "./mockProviderSignals";
 import { mockTrendSignalProviders } from "./providers";
 import { calculateHistoricalMomentum } from "./history";
 import { buildTrendIQSnapshotProvenanceSummary } from "./liveDataAudit";
+import { buildSearchMomentumV1 } from "./searchMomentum";
 import { aggregateSignals } from "./signalAggregator";
 import type {
   AsyncTrendSignalProvider,
@@ -83,6 +84,10 @@ export function buildProductTrendSnapshot(
     confidence,
     trendStatus,
   });
+  const searchMomentumV1 = buildSearchMomentumV1({
+    aggregatedSignals: aggregation.aggregatedSignals,
+    rawSignals: aggregation.rawSignals,
+  });
 
   return {
     productId,
@@ -95,6 +100,7 @@ export function buildProductTrendSnapshot(
     trendStatus,
     provenance: aggregation.provenance,
     liveDataAudit,
+    searchMomentumV1,
   };
 }
 
@@ -117,6 +123,10 @@ export async function buildProductTrendSnapshotAsync(
     confidence,
     trendStatus,
   });
+  const searchMomentumV1 = buildSearchMomentumV1({
+    aggregatedSignals: aggregation.aggregatedSignals,
+    rawSignals: aggregation.rawSignals,
+  });
 
   return {
     productId,
@@ -129,5 +139,6 @@ export async function buildProductTrendSnapshotAsync(
     trendStatus,
     provenance: aggregation.provenance,
     liveDataAudit,
+    searchMomentumV1,
   };
 }

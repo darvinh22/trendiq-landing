@@ -25,6 +25,7 @@ import { readSearchProviderConfig } from "./search/config";
 import { mockSearchProvider } from "./search/mockSearchProvider";
 import { mergeLiveSignalsWithMockFallback } from "./search/provider";
 import { buildSearchSignalsFromSeries, buildSearchVolumeSignalsFromSeries } from "./search/signalBuilder";
+import { buildSearchMomentumV1 } from "./searchMomentum";
 import { createLocalTrendSnapshotStore } from "./snapshotStore";
 import type { ProductTrendSnapshot } from "./types";
 
@@ -338,6 +339,10 @@ export function buildValidatedRayBanMetaLiveSnapshot(): ProductTrendSnapshot {
     confidence,
     trendStatus,
   });
+  const searchMomentumV1 = buildSearchMomentumV1({
+    aggregatedSignals: aggregation.aggregatedSignals,
+    rawSignals: aggregation.rawSignals,
+  });
 
   return {
     productId: RAY_BAN_META_PRODUCT_ID,
@@ -350,6 +355,7 @@ export function buildValidatedRayBanMetaLiveSnapshot(): ProductTrendSnapshot {
     trendStatus,
     provenance: aggregation.provenance,
     liveDataAudit,
+    searchMomentumV1,
   };
 }
 

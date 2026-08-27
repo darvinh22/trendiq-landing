@@ -10,6 +10,7 @@ import {
   buildSignalExecutionPlan,
 } from "./capabilities";
 import { buildTrendIQSnapshotProvenanceSummary } from "./liveDataAudit";
+import { buildSearchMomentumV1 } from "./searchMomentum";
 import { aggregateSignals } from "./signalAggregator";
 import type {
   ProductResolutionResult,
@@ -126,6 +127,10 @@ function buildSnapshot(input: {
     confidence,
     trendStatus,
   });
+  const searchMomentumV1 = buildSearchMomentumV1({
+    aggregatedSignals: aggregation.aggregatedSignals,
+    rawSignals: aggregation.rawSignals,
+  });
 
   return {
     productId: input.productId,
@@ -138,6 +143,7 @@ function buildSnapshot(input: {
     trendStatus,
     provenance: aggregation.provenance,
     liveDataAudit,
+    searchMomentumV1,
   };
 }
 
