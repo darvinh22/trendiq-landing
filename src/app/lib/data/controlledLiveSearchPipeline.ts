@@ -1,6 +1,7 @@
 import { calculateConfidenceScore } from "../scoring/confidenceEngine";
 import { calculateTrendMomentum } from "../scoring/momentumEngine";
 import { calculateTrendIQScore } from "../scoring/scoreEngine";
+import { createDataForSeoGoogleAdsSearchVolumeExecutionAdapter } from "./capabilities/dataForSeoGoogleAdsSearchVolumeAdapter";
 import { createDataForSeoTrendsExecutionAdapter } from "./capabilities/dataForSeoTrendsAdapter";
 import {
   discoverProviderIdentity,
@@ -19,7 +20,7 @@ import type {
   SignalExecutionStateStore,
   SignalExecutionStep,
 } from "./capabilities";
-import type { SearchInterestClient, SearchProviderConfig } from "./search/types";
+import type { SearchInterestClient, SearchProviderConfig, SearchVolumeClient } from "./search/types";
 import type { NormalizedTrendSignal, ProductTrendSnapshot } from "./types";
 
 export interface ControlledLiveSearchApprovalContext {
@@ -28,6 +29,7 @@ export interface ControlledLiveSearchApprovalContext {
   plan: SignalExecutionPlan;
   primaryStep: SignalExecutionStep;
   trendsSteps: SignalExecutionStep[];
+  googleAdsSearchVolumeStep?: SignalExecutionStep;
   blockedSteps: SignalExecutionStep[];
 }
 
@@ -39,6 +41,7 @@ export interface RunControlledLiveSearchToScoreOptions {
   ) => readonly SignalExecutionApproval[] | Promise<readonly SignalExecutionApproval[]>;
   stateStore?: SignalExecutionStateStore;
   searchClient?: SearchInterestClient;
+  searchVolumeClient?: SearchVolumeClient;
   searchConfig?: SearchProviderConfig;
   now?: () => Date;
 }
@@ -63,6 +66,10 @@ function stableNow(now: (() => Date) | undefined): () => Date {
 function isDataForSeoTrendsStep(step: SignalExecutionStep): boolean {
   return step.provider === "dataforseo_trends" &&
     (step.signal === "search_momentum_trends" || step.signal === "growth_velocity_trends");
+}
+
+function isDataForSeoGoogleAdsSearchVolumeStep(step: SignalExecutionStep): boolean {
+  return step.provider === "dataforseo_google_ads" && step.signal === "search_volume_google_ads";
 }
 
 function hasText(value: string | undefined): boolean {
@@ -172,6 +179,7 @@ export async function runControlledLiveSearchToScore(
   const plan = buildSignalExecutionPlan(resolution.profile, { now });
   const trendsSteps = plan.steps.filter(isDataForSeoTrendsStep);
   const primaryStep = trendsSteps.find((step) => step.signal === "search_momentum_trends") ?? trendsSteps[0];
+  const googleAdsSearchVolumeStep = plan.steps.find(isDataForSeoGoogleAdsSearchVolumeStep);
 
   if (!primaryStep) {
     throw new Error(`No DataForSEO Trends execution step was planned for ${resolution.profile.productId}.`);
@@ -184,6 +192,7 @@ export async function runControlledLiveSearchToScore(
     plan,
     primaryStep,
     trendsSteps,
+    googleAdsSearchVolumeStep,
     blockedSteps,
   };
   const approvals = [
@@ -191,23 +200,55 @@ export async function runControlledLiveSearchToScore(
     ...((await options.approve?.(context)) ?? []),
   ];
   const primaryApproval = matchingApproval(approvals, plan, primaryStep);
-  const producedSteps = trendsSteps.filter((step) => matchingApproval(approvals, plan, step));
-  const adapter = createDataForSeoTrendsExecutionAdapter({
-    step: primaryStep,
-    client: options.searchClient,
-    config: options.searchConfig,
-    now,
-    producedSignals: producedSteps.map((step) => step.signal),
-  });
-  const executionResult = await executeApprovedSignal({
-    plan,
-    step: primaryStep,
-    approval: primaryApproval,
-    adapter,
-    stateStore: options.stateStore,
-    now,
-  });
-  const rawSignals = executionResult.status === "completed" ? executionResult.signals : [];
+  const googleAdsSearchVolumeApproval = googleAdsSearchVolumeStep
+    ? matchingApproval(approvals, plan, googleAdsSearchVolumeStep)
+    : undefined;
+  const approvedTrendsSteps = trendsSteps.filter((step) => matchingApproval(approvals, plan, step));
+  const producedSteps = [
+    ...approvedTrendsSteps,
+    ...(googleAdsSearchVolumeStep && googleAdsSearchVolumeApproval ? [googleAdsSearchVolumeStep] : []),
+  ];
+  const executionResults: SignalExecutionResult[] = [];
+  const shouldExecutePrimaryTrendsStep = Boolean(primaryApproval) || !googleAdsSearchVolumeApproval;
+
+  if (shouldExecutePrimaryTrendsStep) {
+    const adapter = createDataForSeoTrendsExecutionAdapter({
+      step: primaryStep,
+      client: options.searchClient,
+      config: options.searchConfig,
+      now,
+      producedSignals: approvedTrendsSteps.map((step) => step.signal),
+    });
+    executionResults.push(await executeApprovedSignal({
+      plan,
+      step: primaryStep,
+      approval: primaryApproval,
+      adapter,
+      stateStore: options.stateStore,
+      now,
+    }));
+  }
+
+  if (googleAdsSearchVolumeStep && googleAdsSearchVolumeApproval) {
+    const adapter = createDataForSeoGoogleAdsSearchVolumeExecutionAdapter({
+      step: googleAdsSearchVolumeStep,
+      client: options.searchVolumeClient,
+      config: options.searchConfig,
+      now,
+    });
+    executionResults.push(await executeApprovedSignal({
+      plan,
+      step: googleAdsSearchVolumeStep,
+      approval: googleAdsSearchVolumeApproval,
+      adapter,
+      stateStore: options.stateStore,
+      now,
+    }));
+  }
+
+  const rawSignals = executionResults
+    .filter((result) => result.status === "completed")
+    .flatMap((result) => result.signals);
   const snapshot = buildSnapshot({
     productId: resolution.profile.productId,
     timestamp,
@@ -221,7 +262,7 @@ export async function runControlledLiveSearchToScore(
     primaryStep,
     producedSteps,
     blockedSteps,
-    executionResults: [executionResult],
+    executionResults,
     rawSignals,
     snapshot,
   };

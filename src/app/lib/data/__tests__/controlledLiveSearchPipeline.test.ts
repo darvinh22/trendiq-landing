@@ -15,6 +15,8 @@ import type {
   SearchInterestSeries,
   SearchInterestType,
   SearchInterestTimeRange,
+  SearchVolumeClient,
+  SearchVolumeSeries,
 } from "../search/types";
 
 const now = new Date("2026-08-12T00:00:00.000Z");
@@ -123,6 +125,61 @@ class FixtureTrendsClient implements SearchInterestClient {
   }): Promise<SearchInterestSeries> {
     this.calls.push(input);
     return this.buildSeries(input);
+  }
+}
+
+function fixtureVolumeSeries(input: {
+  productId: string;
+  aliases: string[];
+  locationCode: number;
+  languageCode: string;
+  monthlySearchVolume?: number;
+}): SearchVolumeSeries {
+  const monthlySearchVolume = input.monthlySearchVolume ?? 12000;
+
+  return {
+    provider: "dataforseo",
+    productId: input.productId,
+    aliases: input.aliases,
+    locationCode: input.locationCode,
+    languageCode: input.languageCode,
+    fetchedAt: now.toISOString(),
+    cost: 0.075,
+    endpoint: "/v3/keywords_data/google_ads/search_volume/live",
+    monthlySearchVolume,
+    observations: input.aliases.map((alias) => ({
+      keyword: alias,
+      locationCode: input.locationCode,
+      languageCode: input.languageCode,
+      monthlySearchVolume,
+      monthlySearches: [
+        { year: 2026, month: 7, searchVolume: monthlySearchVolume },
+      ],
+    })),
+  };
+}
+
+class FixtureSearchVolumeClient implements SearchVolumeClient {
+  readonly calls: Array<{
+    productId: string;
+    aliases: string[];
+    locationCode: number;
+    languageCode: string;
+  }> = [];
+
+  constructor(private readonly monthlySearchVolume = 12000) {}
+
+  async getSearchVolume(input: {
+    productId: string;
+    aliases: string[];
+    locationCode: number;
+    languageCode: string;
+  }): Promise<SearchVolumeSeries> {
+    this.calls.push(input);
+    return fixtureVolumeSeries({
+      ...input,
+      monthlySearchVolume: this.monthlySearchVolume,
+    });
   }
 }
 
@@ -325,14 +382,120 @@ describe("controlled live search-to-score pipeline", () => {
     expect(result.snapshot.aggregatedSignals.growthVelocity.searchDerivedTrendChangePercent).toBeUndefined();
   });
 
+  it("executes approved DataForSEO Google Ads Search Volume without requiring a Trends request", async () => {
+    const trendsClient = new FixtureTrendsClient();
+    const volumeClient = new FixtureSearchVolumeClient(12000);
+    const result = await runControlledLiveSearchToScore({
+      query: "Garmin Venu 4",
+      searchClient: trendsClient,
+      searchVolumeClient: volumeClient,
+      searchConfig: searchConfig(),
+      stateStore: new InMemorySignalExecutionStateStore(),
+      now: () => now,
+      approve: ({ plan, googleAdsSearchVolumeStep }) =>
+        googleAdsSearchVolumeStep ? approvalsFor(plan, [googleAdsSearchVolumeStep], "ads") : [],
+    });
+    const execution = result.executionResults[0];
+    const detailedReviews = result.plan.steps.find((step) =>
+      step.provider === "dataforseo_google_shopping_reviews"
+    );
+    const searchVolume7d = result.rawSignals.find((signal) => signal.metadata?.engineField === "searchVolume7d");
+
+    expect(trendsClient.calls).toHaveLength(0);
+    expect(volumeClient.calls).toEqual([
+      {
+        productId: "user-search-garmin-venu-4",
+        aliases: ["Garmin Venu 4"],
+        locationCode: 2840,
+        languageCode: "en",
+      },
+    ]);
+    expect(result.producedSteps.map((step) => step.signal)).toEqual(["search_volume_google_ads"]);
+    expect(result.executionResults).toHaveLength(1);
+    expect(execution.status).toBe("completed");
+    expect(execution.provider).toBe("dataforseo_google_ads");
+    expect(execution.operationCount).toBe(1);
+    expect(execution.httpRequestCount).toBe(1);
+    expect(execution.paidLiveOperationsPerformed).toBe(1);
+    expect(result.rawSignals).toHaveLength(2);
+    expect(result.rawSignals.every((signal) => signal.sourceProvenance.provider === "dataforseo_google_ads")).toBe(true);
+    expect(result.rawSignals.every((signal) => signal.sourceProvenance.approvalStatus === "approved")).toBe(true);
+    expect(searchVolume7d?.value).toBe(2760);
+    expect(searchVolume7d?.metadata?.controlledProducedSignal).toBe("search_volume_google_ads");
+    expect(result.snapshot.aggregatedSignals.searchMomentum.searchVolume7d).toBe(2760);
+    expect(result.snapshot.aggregatedSignals.growthVelocity.trendChangePercent).toBe(0);
+    expect(result.snapshot.provenance.sources.map((source) => source.source)).toEqual(["searchWeb"]);
+    expect(result.snapshot.liveDataAudit?.liveComponents).toEqual(["searchMomentum"]);
+    expect(detailedReviews?.futureExecutionEligibility).toBe("needs_identity");
+    expect(detailedReviews?.blockReason).toBe("needs_provider_identity");
+  });
+
+  it("keeps Google Ads Search Volume exact-query only even when broader measurement candidates exist", async () => {
+    const trendsClient = new FixtureTrendsClient();
+    const volumeClient = new FixtureSearchVolumeClient(24000);
+    const result = await runControlledLiveSearchToScore({
+      query: "Garmin Venu 4",
+      searchClient: trendsClient,
+      searchVolumeClient: volumeClient,
+      searchConfig: searchConfig(),
+      stateStore: new InMemorySignalExecutionStateStore(),
+      now: () => now,
+      approve: ({ plan, googleAdsSearchVolumeStep }) =>
+        googleAdsSearchVolumeStep ? approvalsFor(plan, [googleAdsSearchVolumeStep], "ads-exact") : [],
+    });
+
+    expect(result.plan.product.measurementQueries?.map((candidate) => candidate.query)).toEqual([
+      "Garmin Venu 4",
+      "Venu 4",
+      "Garmin Venu",
+    ]);
+    expect(result.plan.product.measurementQueries?.filter((candidate) => candidate.currentlyExecutable)).toHaveLength(1);
+    expect(volumeClient.calls[0].aliases).toEqual(["Garmin Venu 4"]);
+    expect(volumeClient.calls[0].aliases).not.toContain("Venu 4");
+    expect(volumeClient.calls[0].aliases).not.toContain("Garmin Venu");
+  });
+
+  it("prevents duplicate approved Google Ads Search Volume executions from invoking the client twice", async () => {
+    const trendsClient = new FixtureTrendsClient();
+    const volumeClient = new FixtureSearchVolumeClient(12000);
+    const stateStore = new InMemorySignalExecutionStateStore();
+    const options = {
+      query: "Garmin Venu 4",
+      searchClient: trendsClient,
+      searchVolumeClient: volumeClient,
+      searchConfig: searchConfig(),
+      stateStore,
+      now: () => now,
+      approve: ({ plan, googleAdsSearchVolumeStep }: {
+        plan: SignalExecutionPlan;
+        googleAdsSearchVolumeStep?: SignalExecutionStep;
+      }) => googleAdsSearchVolumeStep ? approvalsFor(plan, [googleAdsSearchVolumeStep], "duplicate-ads") : [],
+    };
+
+    const first = await runControlledLiveSearchToScore(options);
+    const second = await runControlledLiveSearchToScore(options);
+
+    expect(first.executionResults[0].status).toBe("completed");
+    expect(second.executionResults[0].status).toBe("blocked");
+    expect(second.executionResults[0].blockReason).toBe("duplicate_execution");
+    expect(trendsClient.calls).toHaveLength(0);
+    expect(volumeClient.calls).toHaveLength(1);
+  });
+
   it("keeps the controlled executor provider-agnostic while the Trends adapter owns provider imports", () => {
     const executorSource = readFileSync(new URL("../capabilities/signalExecutor.ts", import.meta.url), "utf8");
     const adapterSource = readFileSync(new URL("../capabilities/dataForSeoTrendsAdapter.ts", import.meta.url), "utf8");
+    const googleAdsAdapterSource = readFileSync(
+      new URL("../capabilities/dataForSeoGoogleAdsSearchVolumeAdapter.ts", import.meta.url),
+      "utf8"
+    );
 
     expect(executorSource).not.toContain("DataForSeo");
     expect(executorSource).not.toContain("../search");
     expect(executorSource).not.toContain("fetch(");
     expect(adapterSource).toContain("DataForSeoTrendsClient");
     expect(adapterSource).toContain("buildSearchSignalsFromSeries");
+    expect(googleAdsAdapterSource).toContain("DataForSeoGoogleAdsSearchVolumeClient");
+    expect(googleAdsAdapterSource).toContain("buildSearchVolumeSignalsFromSeries");
   });
 });
