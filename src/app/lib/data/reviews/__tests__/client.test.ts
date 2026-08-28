@@ -13,6 +13,7 @@ import {
 } from "../client";
 import { REVIEW_PRODUCT_IDENTITIES, readReviewProviderConfig } from "../config";
 import { evaluateGoogleShoppingProductMatch } from "../matching";
+import type { ReviewProductIdentityConfig } from "../types";
 
 const now = new Date("2026-08-21T23:47:20.000Z");
 const identity = REVIEW_PRODUCT_IDENTITIES["ray-ban-meta"];
@@ -120,6 +121,14 @@ const rayBanMetaItem = {
     rating_max: 5,
     votes_count: 1700,
   },
+};
+
+const syntheticWidgetIdentity: ReviewProductIdentityConfig = {
+  productId: "synthetic-widget-pro",
+  canonicalSearchQuery: "Acme Widget Pro",
+  productTitle: "Acme Widget Pro",
+  brand: "Acme",
+  generation: "Widget Pro",
 };
 
 describe("DataForSEO Google Shopping review mapping", () => {
@@ -276,6 +285,32 @@ describe("DataForSEO Google Shopping review mapping", () => {
       locationCode: 2840,
       languageCode: "en",
       fetchedAt: now.toISOString(),
+    })).toThrow("high-confidence rated product match");
+  });
+
+  it("does not select needs_identity matches even when the confidence threshold is lowered", () => {
+    expect(() => mapDataForSeoGoogleShoppingProductsResponse({
+      response: productsResponse([
+        {
+          ...rayBanMetaItem,
+          title: "Acme Widget",
+          seller: "Acme",
+          product_id: "retailer-widget",
+          data_docid: "retailer-doc",
+          gid: "retailer-gid",
+          product_rating: {
+            value: 4.2,
+            rating_max: 5,
+            votes_count: 420,
+          },
+        },
+      ]),
+      productId: "synthetic-widget-pro",
+      identity: syntheticWidgetIdentity,
+      locationCode: 2840,
+      languageCode: "en",
+      fetchedAt: now.toISOString(),
+      minimumMatchConfidence: "low",
     })).toThrow("high-confidence rated product match");
   });
 

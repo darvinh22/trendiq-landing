@@ -4,6 +4,7 @@ import type { ProductProfile } from "../capabilities";
 export type ReviewProviderMode = "mock" | "live";
 export type ReviewProviderVendor = "dataforseo";
 export type ProductMatchConfidence = "high" | "medium" | "low" | "rejected";
+export type ReviewIdentityDecision = "match" | "needs_identity" | "reject";
 
 export interface GoogleShoppingProductIdentifier {
   productId?: string;
@@ -64,6 +65,7 @@ export interface GoogleShoppingProductCandidate {
 }
 
 export interface ProductMatchResult {
+  identityDecision: ReviewIdentityDecision;
   confidence: ProductMatchConfidence;
   score: number;
   reasons: string[];

@@ -422,6 +422,7 @@ export function mapDataForSeoGoogleShoppingProductsResponse(input: {
     }))
     .filter((entry) =>
       typeof entry.candidate.averageRating === "number" &&
+      entry.match.identityDecision === "match" &&
       matchConfidenceMeetsThreshold(entry.match.confidence, input.minimumMatchConfidence ?? "high")
     )
     .sort((a, b) => {
