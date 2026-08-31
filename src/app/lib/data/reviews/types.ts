@@ -1,4 +1,4 @@
-import type { NormalizedTrendSignal } from "../types";
+import type { NormalizedTrendSignal, SignalSourceProvenanceMode } from "../types";
 import type { ProductProfile } from "../capabilities";
 
 export type ReviewProviderMode = "mock" | "live";
@@ -263,6 +263,111 @@ export interface GoogleShoppingRecentReviewsClient {
     aggregateAverageRating?: number;
   }): Promise<GoogleShoppingRecentReviewsObservation>;
 }
+
+export type ValidatedDetailedReviewEvidenceStatus =
+  | "reviews_validated"
+  | "identity_inconclusive"
+  | "provider_pending"
+  | "provider_no_result"
+  | "provider_error"
+  | "malformed_response";
+
+export type ReviewEvidenceProviderMode = Extract<SignalSourceProvenanceMode, "live" | "derived-live">;
+export type ReviewDistributionEvidenceStatus =
+  | "usable"
+  | "provisional"
+  | "insufficient"
+  | "mismatch"
+  | "unavailable";
+export type ReviewTextEvidenceStatus = RecentAverageRatingStatus | "unavailable";
+export type ReviewTextSampleScope = "trailing_window_dated_reviews" | "none";
+
+export interface NormalizedRatingGroupEvidence {
+  star: 1 | 2 | 3 | 4 | 5;
+  count: number;
+}
+
+export interface NormalizedReviewCostProvenance {
+  taskCost: number | null;
+  observationCost: number | null;
+  sourceCostCompatibleValue: number | null;
+}
+
+export interface NormalizedReviewDistributionEvidence {
+  status: ReviewDistributionEvidenceStatus;
+  reviewsCount: number | null;
+  ratingGroups: NormalizedRatingGroupEvidence[];
+  ratingConsensusStatus: RatingConsensusQualityStatus | null;
+  ratingConsensusQuality: number | null;
+  provisionalRatingConsensusQuality: number | null;
+  distributionSource: RatingDistributionSource | null;
+  distributionScope: RatingDistributionScope | null;
+  distributionComposition: string | null;
+}
+
+export interface NormalizedTextReviewEvidence {
+  status: ReviewTextEvidenceStatus;
+  fetchedReviewCount: number;
+  qualifyingReviewCount: number;
+  recentAverageRating: number | null;
+  provisionalRecentAverageRating: number | null;
+  sourceDomains: string[];
+  sampleScope: ReviewTextSampleScope;
+  windowStart: string | null;
+  windowEnd: string | null;
+  windowDays: number | null;
+  calculationMethod: string | null;
+  datePrecision: string | null;
+}
+
+interface NormalizedValidatedReviewEvidenceBase {
+  canonicalProductId: string;
+  provider: ReviewProviderVendor;
+  providerEvidenceMode: ReviewEvidenceProviderMode;
+  totalReviewsAvailable: number | null;
+  fetchedReviewCount: number;
+  qualifyingReviewCount: number;
+  sourceDomains: string[];
+  observedAt: string | null;
+  cost: NormalizedReviewCostProvenance;
+  distributionEvidence: NormalizedReviewDistributionEvidence;
+  textEvidence: NormalizedTextReviewEvidence;
+  distributionEvidenceStatus: ReviewDistributionEvidenceStatus;
+  textEvidenceStatus: ReviewTextEvidenceStatus;
+  reviewRetrievalStatus: ValidatedDetailedReviewEvidenceStatus;
+  validationStatus: ValidatedDetailedReviewEvidenceStatus;
+  recentAverageRating: number | null;
+  ratingConsensusStatus: RatingConsensusQualityStatus | null;
+  ratingConsensusQuality: number | null;
+  distributionSource: RatingDistributionSource | null;
+  distributionScope: RatingDistributionScope | null;
+  textSampleScope: ReviewTextSampleScope;
+  reason?: string;
+}
+
+export interface NormalizedReviewsValidatedEvidence extends NormalizedValidatedReviewEvidenceBase {
+  status: "reviews_validated";
+  validationStatus: "reviews_validated";
+  reviewRetrievalStatus: "reviews_validated";
+}
+
+export interface NormalizedDegradedReviewEvidence extends NormalizedValidatedReviewEvidenceBase {
+  status: Exclude<ValidatedDetailedReviewEvidenceStatus, "reviews_validated">;
+  validationStatus: Exclude<ValidatedDetailedReviewEvidenceStatus, "reviews_validated">;
+  reviewRetrievalStatus: Exclude<ValidatedDetailedReviewEvidenceStatus, "reviews_validated">;
+  distributionEvidenceStatus: "unavailable";
+  textEvidenceStatus: "unavailable";
+  recentAverageRating: null;
+  ratingConsensusStatus: null;
+  ratingConsensusQuality: null;
+  distributionSource: null;
+  distributionScope: null;
+  textSampleScope: "none";
+}
+
+export type NormalizedValidatedReviewEvidence =
+  | NormalizedReviewsValidatedEvidence
+  | NormalizedDegradedReviewEvidence;
 
 export interface ReviewSignalBuildResult {
   signals: NormalizedTrendSignal[];
