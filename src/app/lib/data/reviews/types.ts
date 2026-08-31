@@ -12,6 +12,72 @@ export interface GoogleShoppingProductIdentifier {
   gid?: string;
 }
 
+export type EphemeralProviderIdentitySource = "google_shopping_aggregate_candidate";
+export type EphemeralProviderIdentityStatus = "ready" | "identity_not_ready" | "identity_inconclusive";
+
+export interface EphemeralProviderIdentityEvidence {
+  source: EphemeralProviderIdentitySource;
+  matchDecision: "match";
+  matchConfidence: "high";
+  matchedProductTitle: string;
+  seller?: string;
+  matchReasons: string[];
+  observedAt: string;
+}
+
+export interface EphemeralProviderIdentity {
+  provider: ReviewProviderVendor;
+  productId: string;
+  identifiers: {
+    gid: string;
+    productId?: string;
+    dataDocid?: string;
+  };
+  evidence: EphemeralProviderIdentityEvidence;
+}
+
+export type EphemeralProviderIdentityResult =
+  | {
+      status: "ready";
+      identity: EphemeralProviderIdentity;
+    }
+  | {
+      status: "identity_not_ready" | "identity_inconclusive";
+      reason: string;
+      identity?: never;
+    };
+
+export interface GoogleShoppingDetailedReviewsRequestPlan {
+  provider: ReviewProviderVendor;
+  providerCapability: "dataforseo_google_shopping_reviews";
+  method: "POST";
+  endpointPath: string;
+  networkAllowed: false;
+  product: {
+    productId: string;
+    canonicalSearchQuery: string;
+    productTitle: string;
+    brand: string;
+    generation?: string;
+  };
+  requiredProviderIds: {
+    gid: string;
+    productId?: string;
+    dataDocid?: string;
+  };
+  identityEvidence: EphemeralProviderIdentityEvidence;
+  requestPayload: Array<{
+    gid: string;
+    product_id?: string;
+    data_docid?: string;
+    location_code: number;
+    language_code: string;
+    depth: number;
+    priority: 1;
+    tag: string;
+  }>;
+}
+
 export interface ReviewProductIdentityConfig {
   productId: string;
   canonicalSearchQuery: string;

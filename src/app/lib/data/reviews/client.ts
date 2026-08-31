@@ -2,7 +2,12 @@ import type { FetchLike } from "../search/client";
 import { evaluateGoogleShoppingProductMatch, matchConfidenceMeetsThreshold } from "./matching";
 import { buildRatingConsensusQuality } from "./ratingConsensus";
 import type {
+  EphemeralProviderIdentity,
+  EphemeralProviderIdentityResult,
+  EphemeralProviderIdentitySource,
+  GoogleShoppingDetailedReviewsRequestPlan,
   GoogleShoppingProductCandidate,
+  GoogleShoppingProductIdentifier,
   GoogleShoppingRecentReviewsClient,
   GoogleShoppingRecentReviewsObservation,
   GoogleShoppingReviewItemObservation,
@@ -10,6 +15,7 @@ import type {
   GoogleShoppingReviewObservation,
   ProductMatchConfidence,
   RatingDistributionInput,
+  ReviewIdentityDecision,
   ReviewProviderConfig,
   ReviewProductIdentityConfig,
 } from "./types";
@@ -20,6 +26,8 @@ export const DATAFORSEO_GOOGLE_SHOPPING_PRODUCTS_TASK_GET_ADVANCED_PATH_PREFIX =
 export const DATAFORSEO_GOOGLE_SHOPPING_REVIEWS_TASK_POST_PATH = "/v3/merchant/google/reviews/task_post";
 export const DATAFORSEO_GOOGLE_SHOPPING_REVIEWS_TASK_GET_ADVANCED_PATH_PREFIX =
   "/v3/merchant/google/reviews/task_get/advanced";
+
+const SAFE_PROVIDER_IDENTIFIER_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 
 interface FetchResponseLike {
   ok: boolean;
@@ -230,6 +238,332 @@ function finiteNumber(value: unknown): number | undefined {
 
 function stringOrUndefined(value: unknown): string | undefined {
   return typeof value === "string" && value.length ? value : undefined;
+}
+
+function looksLikeUrlScheme(value: string): boolean {
+  return /^[A-Za-z][A-Za-z0-9+.-]*:/.test(value);
+}
+
+function providerIdentifierIssue(
+  value: unknown,
+  field: keyof GoogleShoppingProductIdentifier,
+  options: { required: boolean }
+): string | undefined {
+  if (value === undefined || value === null || value === "") {
+    return options.required ? `missing_provider_id:${field}` : undefined;
+  }
+
+  if (typeof value !== "string") return `invalid_provider_id_type:${field}`;
+  if (!value.trim()) return `missing_provider_id:${field}`;
+  if (!SAFE_PROVIDER_IDENTIFIER_PATTERN.test(value) || value.includes("..") || looksLikeUrlScheme(value)) {
+    return `unsafe_provider_id:${field}`;
+  }
+
+  return undefined;
+}
+
+function validateRequiredProviderIdentifier(
+  value: unknown,
+  field: keyof GoogleShoppingProductIdentifier
+): string {
+  const issue = providerIdentifierIssue(value, field, { required: true });
+  if (issue) throw new ReviewProviderError(`Google Shopping provider identifier failed validation: ${issue}`);
+
+  return value as string;
+}
+
+function validateOptionalProviderIdentifier(
+  value: unknown,
+  field: keyof GoogleShoppingProductIdentifier
+): string | undefined {
+  const issue = providerIdentifierIssue(value, field, { required: false });
+  if (issue) throw new ReviewProviderError(`Google Shopping provider identifier failed validation: ${issue}`);
+
+  return stringOrUndefined(value);
+}
+
+function canonicalIdentityIssue(identity: ReviewProductIdentityConfig): string | undefined {
+  const requiredFields = ["productId", "canonicalSearchQuery", "productTitle", "brand"] as const;
+
+  for (const field of requiredFields) {
+    const value = identity[field];
+    if (typeof value !== "string" || !value.trim()) return `missing_canonical_identity:${field}`;
+    if (value !== value.trim()) return `unsafe_canonical_identity:${field}`;
+  }
+
+  if (identity.generation !== undefined) {
+    if (typeof identity.generation !== "string" || !identity.generation.trim()) {
+      return "missing_canonical_identity:generation";
+    }
+
+    if (identity.generation !== identity.generation.trim()) {
+      return "unsafe_canonical_identity:generation";
+    }
+  }
+
+  return undefined;
+}
+
+function semanticIdentityForAggregateEvidence(identity: ReviewProductIdentityConfig): ReviewProductIdentityConfig {
+  return {
+    productId: identity.productId,
+    canonicalSearchQuery: identity.canonicalSearchQuery,
+    productTitle: identity.productTitle,
+    brand: identity.brand,
+    generation: identity.generation,
+    acceptedSellers: identity.acceptedSellers,
+  };
+}
+
+function aggregateEvidenceTrustIssue(input: {
+  title: string;
+  seller?: string;
+  identifiers: GoogleShoppingProductIdentifier;
+  identity: ReviewProductIdentityConfig;
+}): { status: "identity_not_ready" | "identity_inconclusive"; reason: string } | undefined {
+  if (!input.title.trim()) {
+    return {
+      status: "identity_not_ready",
+      reason: "missing_aggregate_candidate_title",
+    };
+  }
+
+  const match = evaluateGoogleShoppingProductMatch(
+    {
+      title: input.title,
+      seller: input.seller,
+      identifiers: input.identifiers,
+    },
+    semanticIdentityForAggregateEvidence(input.identity)
+  );
+
+  if (match.identityDecision !== "match") {
+    return {
+      status: "identity_not_ready",
+      reason: "aggregate_candidate_semantic_mismatch",
+    };
+  }
+
+  if (match.confidence !== "high") {
+    return {
+      status: "identity_inconclusive",
+      reason: "aggregate_candidate_semantic_confidence_not_high",
+    };
+  }
+
+  return undefined;
+}
+
+function freezeDetailedReviewsRequestPlan(
+  plan: GoogleShoppingDetailedReviewsRequestPlan
+): GoogleShoppingDetailedReviewsRequestPlan {
+  const identityEvidence = Object.freeze({
+    ...plan.identityEvidence,
+    matchReasons: Object.freeze([...plan.identityEvidence.matchReasons]) as unknown as string[],
+  });
+
+  return Object.freeze({
+    ...plan,
+    product: Object.freeze({ ...plan.product }),
+    requiredProviderIds: Object.freeze({ ...plan.requiredProviderIds }),
+    identityEvidence: identityEvidence as GoogleShoppingDetailedReviewsRequestPlan["identityEvidence"],
+    requestPayload: Object.freeze(
+      plan.requestPayload.map((payload) => Object.freeze({ ...payload }))
+    ) as unknown as GoogleShoppingDetailedReviewsRequestPlan["requestPayload"],
+  });
+}
+
+export function createEphemeralProviderIdentityFromAggregateObservation(input: {
+  observation: GoogleShoppingReviewObservation;
+  identity: ReviewProductIdentityConfig;
+  candidateMatchDecision: ReviewIdentityDecision;
+  source?: EphemeralProviderIdentitySource;
+}): EphemeralProviderIdentityResult {
+  const canonicalIssue = canonicalIdentityIssue(input.identity);
+  if (canonicalIssue) {
+    return {
+      status: "identity_not_ready",
+      reason: canonicalIssue,
+    };
+  }
+
+  if (!input.observation.productId.trim()) {
+    return {
+      status: "identity_not_ready",
+      reason: "missing_aggregate_observation_product_id",
+    };
+  }
+
+  if (input.observation.productId !== input.identity.productId) {
+    return {
+      status: "identity_not_ready",
+      reason: "aggregate_observation_product_mismatch",
+    };
+  }
+
+  if (input.candidateMatchDecision !== "match") {
+    return {
+      status: "identity_not_ready",
+      reason: "candidate_match_decision_not_match",
+    };
+  }
+
+  if (input.observation.matchConfidence !== "high") {
+    return {
+      status: "identity_inconclusive",
+      reason: "candidate_match_confidence_not_high",
+    };
+  }
+
+  const gidIssue = providerIdentifierIssue(input.observation.identifiers.gid, "gid", { required: true });
+  if (gidIssue) {
+    return {
+      status: "identity_not_ready",
+      reason: gidIssue,
+    };
+  }
+
+  const productIdIssue = providerIdentifierIssue(input.observation.identifiers.productId, "productId", {
+    required: false,
+  });
+  if (productIdIssue) {
+    return {
+      status: "identity_not_ready",
+      reason: productIdIssue,
+    };
+  }
+
+  const dataDocidIssue = providerIdentifierIssue(input.observation.identifiers.dataDocid, "dataDocid", {
+    required: false,
+  });
+  if (dataDocidIssue) {
+    return {
+      status: "identity_not_ready",
+      reason: dataDocidIssue,
+    };
+  }
+
+  const trustIssue = aggregateEvidenceTrustIssue({
+    title: input.observation.matchedProductTitle,
+    seller: input.observation.seller,
+    identifiers: input.observation.identifiers,
+    identity: input.identity,
+  });
+  if (trustIssue) return trustIssue;
+
+  const observedProductId = stringOrUndefined(input.observation.identifiers.productId);
+  const observedDataDocid = stringOrUndefined(input.observation.identifiers.dataDocid);
+
+  return {
+    status: "ready",
+    identity: {
+      provider: input.observation.provider,
+      productId: input.observation.productId,
+      identifiers: {
+        gid: input.observation.identifiers.gid as string,
+        ...(observedProductId ? { productId: observedProductId } : {}),
+        ...(observedDataDocid ? { dataDocid: observedDataDocid } : {}),
+      },
+      evidence: {
+        source: input.source ?? "google_shopping_aggregate_candidate",
+        matchDecision: "match",
+        matchConfidence: "high",
+        matchedProductTitle: input.observation.matchedProductTitle,
+        seller: input.observation.seller,
+        matchReasons: input.observation.matchReasons,
+        observedAt: input.observation.fetchedAt,
+      },
+    },
+  };
+}
+
+export function buildDataForSeoGoogleShoppingReviewsRequestPlan(input: {
+  productId: string;
+  identity: ReviewProductIdentityConfig;
+  ephemeralIdentity: EphemeralProviderIdentity;
+  locationCode: number;
+  languageCode: string;
+  depth: number;
+  tag?: string;
+}): GoogleShoppingDetailedReviewsRequestPlan {
+  if (input.ephemeralIdentity.provider !== "dataforseo") {
+    throw new ReviewProviderError("Detailed review request plan requires a DataForSEO provider identity");
+  }
+
+  const canonicalIssue = canonicalIdentityIssue(input.identity);
+  if (canonicalIssue) {
+    throw new ReviewProviderError(
+      `Detailed review request plan requires a valid canonical product identity: ${canonicalIssue}`
+    );
+  }
+
+  if (!input.productId.trim() || input.productId !== input.productId.trim()) {
+    throw new ReviewProviderError("Detailed review request plan product ID is invalid");
+  }
+
+  if (input.ephemeralIdentity.productId !== input.productId || input.identity.productId !== input.productId) {
+    throw new ReviewProviderError("Detailed review request plan product identity mismatch");
+  }
+
+  if (
+    input.ephemeralIdentity.evidence.source !== "google_shopping_aggregate_candidate" ||
+    input.ephemeralIdentity.evidence.matchDecision !== "match" ||
+    input.ephemeralIdentity.evidence.matchConfidence !== "high"
+  ) {
+    throw new ReviewProviderError("Detailed review request plan requires high-confidence aggregate identity evidence");
+  }
+
+  const gid = validateRequiredProviderIdentifier(input.ephemeralIdentity.identifiers.gid, "gid");
+  const productId = validateOptionalProviderIdentifier(input.ephemeralIdentity.identifiers.productId, "productId");
+  const dataDocid = validateOptionalProviderIdentifier(input.ephemeralIdentity.identifiers.dataDocid, "dataDocid");
+  const trustIssue = aggregateEvidenceTrustIssue({
+    title: input.ephemeralIdentity.evidence.matchedProductTitle,
+    seller: input.ephemeralIdentity.evidence.seller,
+    identifiers: {
+      gid,
+      ...(productId ? { productId } : {}),
+      ...(dataDocid ? { dataDocid } : {}),
+    },
+    identity: input.identity,
+  });
+
+  if (trustIssue) {
+    throw new ReviewProviderError(`Detailed review request plan evidence failed validation: ${trustIssue.reason}`);
+  }
+
+  const requestPayload: DataForSeoGoogleShoppingReviewsRequestPayload = {
+    gid,
+    location_code: input.locationCode,
+    language_code: input.languageCode,
+    depth: input.depth,
+    priority: 1,
+    tag: input.tag ?? `trendiq:${input.productId}:review-quality:google-shopping-reviews`,
+  };
+
+  if (productId) requestPayload.product_id = productId;
+  if (dataDocid) requestPayload.data_docid = dataDocid;
+
+  return freezeDetailedReviewsRequestPlan({
+    provider: "dataforseo",
+    providerCapability: "dataforseo_google_shopping_reviews",
+    method: "POST",
+    endpointPath: DATAFORSEO_GOOGLE_SHOPPING_REVIEWS_TASK_POST_PATH,
+    networkAllowed: false,
+    product: {
+      productId: input.identity.productId,
+      canonicalSearchQuery: input.identity.canonicalSearchQuery,
+      productTitle: input.identity.productTitle,
+      brand: input.identity.brand,
+      ...(input.identity.generation ? { generation: input.identity.generation } : {}),
+    },
+    requiredProviderIds: {
+      gid,
+      ...(productId ? { productId } : {}),
+      ...(dataDocid ? { dataDocid } : {}),
+    },
+    identityEvidence: input.ephemeralIdentity.evidence,
+    requestPayload: [requestPayload],
+  });
 }
 
 function selectRatingEvidence(item: DataForSeoGoogleShoppingProductItem): Pick<
