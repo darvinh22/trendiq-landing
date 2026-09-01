@@ -1,6 +1,7 @@
 export * from "./dailyLiveSnapshotRunner";
 export * from "./capabilities";
 export * from "./controlledLiveSearchPipeline";
+export * from "./consumerResult";
 export * from "./history";
 export * from "./liveDataAudit";
 export * from "./liveSnapshotFixtures";
