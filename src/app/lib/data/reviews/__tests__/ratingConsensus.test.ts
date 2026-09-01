@@ -92,4 +92,61 @@ describe("ratingConsensusQuality", () => {
     expect(result.status).toBe("derived-live");
     expect(result.ratingConsensusQuality).toBeGreaterThan(0);
   });
+
+  it.each<Array<[string, RatingDistributionInput]>>([
+    ["negative star count", distribution([-1, 0, 0, 0, 101])],
+    ["non-finite star count", distribution([0, Number.NaN, 0, 0, 100])],
+    ["infinite star count", distribution([0, 0, Number.POSITIVE_INFINITY, 0, 100])],
+    ["fractional star count", distribution([0, 0, 0.5, 0, 100])],
+    ["empty distribution", distribution([0, 0, 0, 0, 0])],
+    ["missing bucket", {
+      ...distribution([0, 0, 0, 0, 100]),
+      star4Count: undefined as unknown as number,
+    }],
+  ])("fails closed for malformed distribution input: %s", (_name, input) => {
+    const result = buildRatingConsensusQuality({
+      ...input,
+      aggregateAverageRating: 4.5,
+    });
+
+    expect(result.status).toBe("insufficient");
+    expect(result.ratingConsensusQuality).toBeUndefined();
+    expect(result.provisionalRatingConsensusQuality).toBeUndefined();
+    expect(result.totalDistributionCount).toBe(0);
+    expect(result.mean).toBe(0);
+    expect(result.standardDeviation).toBe(0);
+    expect(result.variance).toBe(0);
+    expect(result.qualityGate).toBe(0);
+    expect(result.shapeSupport).toBe(0);
+    expect(result.lowTailPenalty).toBe(0);
+    expect(result.aggregateRatingDelta).toBeUndefined();
+  });
+
+  it("fails closed when source and scope are incoherent", () => {
+    const result = buildRatingConsensusQuality({
+      ...distribution([0, 0, 0, 0, 100], "provider_rating_groups"),
+      distributionScope: "fetched_review_sample",
+      aggregateAverageRating: 5,
+    });
+
+    expect(result.status).toBe("insufficient");
+    expect(result.ratingConsensusQuality).toBeUndefined();
+    expect(result.totalDistributionCount).toBe(0);
+  });
+
+  it("keeps extreme but valid distributions finite and bounded", () => {
+    for (const input of [
+      distribution([0, 0, 0, 1, 999], "provider_rating_groups"),
+      distribution([999, 1, 0, 0, 0], "provider_rating_groups"),
+    ]) {
+      const result = buildRatingConsensusQuality(input);
+      const quality = result.ratingConsensusQuality;
+
+      expect(result.status).toBe("derived-live");
+      expect(typeof quality).toBe("number");
+      expect(Number.isFinite(quality)).toBe(true);
+      expect(quality).toBeGreaterThanOrEqual(0);
+      expect(quality).toBeLessThanOrEqual(100);
+    }
+  });
 });

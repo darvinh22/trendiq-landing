@@ -32,6 +32,17 @@ function finiteNonNegativeNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
+function finiteNonNegativeInteger(value: unknown): number | null {
+  const numberValue = finiteNonNegativeNumber(value);
+  return numberValue !== null && Number.isInteger(numberValue) ? numberValue : null;
+}
+
+function finiteConsensusScore(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 100
+    ? value
+    : null;
+}
+
 function nonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length ? value.trim() : undefined;
 }
@@ -180,6 +191,16 @@ function emptyDistributionEvidence(): NormalizedReviewDistributionEvidence {
     distributionSource: null,
     distributionScope: null,
     distributionComposition: null,
+    mean: null,
+    standardDeviation: null,
+    variance: null,
+    qualityGate: null,
+    shapeSupport: null,
+    lowTailPenalty: null,
+    aggregateAverageRating: null,
+    aggregateRatingDelta: null,
+    aggregateRatingMismatchThreshold: null,
+    calculationMethod: null,
   };
 }
 
@@ -270,13 +291,15 @@ function distributionStatus(
   if (!consensus) return "unavailable";
   const status = ratingConsensusQualityStatus(consensus.status);
   if (!status) return "unavailable";
+  if (!distributionSourceScopePairIsValid(input.distributionSource, input.distributionScope)) {
+    return "unavailable";
+  }
+  if (!ratingGroupCountsMatchReviewCount(input.ratingGroups, input.reviewsCount)) {
+    return "unavailable";
+  }
   if (
     status === "derived-live" &&
-    finiteNonNegativeNumber(consensus.ratingConsensusQuality) !== null &&
-    input.reviewsCount !== null &&
-    input.ratingGroups.length === 5 &&
-    input.distributionSource !== null &&
-    input.distributionScope !== null
+    finiteConsensusScore(consensus.ratingConsensusQuality) !== null
   ) {
     return "usable";
   }
@@ -285,16 +308,45 @@ function distributionStatus(
   return status;
 }
 
+function distributionSourceScopePairIsValid(
+  distributionSource: RatingDistributionSource | null,
+  distributionScope: RatingDistributionScope | null
+): boolean {
+  // provider_rating_groups is the full provider distribution; review_items is
+  // sample-derived from the fetched review page and must keep sample scope.
+  if (distributionSource === "provider_rating_groups") {
+    return distributionScope === "full_provider_distribution";
+  }
+
+  if (distributionSource === "review_items") {
+    return distributionScope === "fetched_review_sample";
+  }
+
+  return false;
+}
+
+function ratingGroupCountsMatchReviewCount(
+  ratingGroups: NormalizedRatingGroupEvidence[],
+  reviewsCount: number | null
+): boolean {
+  if (reviewsCount === null || !Number.isInteger(reviewsCount) || reviewsCount <= 0) return false;
+  if (ratingGroups.length !== 5) return false;
+
+  const ratingGroupTotal = ratingGroups.reduce((sum, group) => sum + group.count, 0);
+
+  return ratingGroupTotal === reviewsCount;
+}
+
 function ratingGroupsForConsensus(
   consensus: GoogleShoppingRecentReviewsObservation["ratingConsensus"]
 ): NormalizedRatingGroupEvidence[] {
   if (!consensus) return [];
   const counts = [
-    finiteNonNegativeNumber(consensus.star1Count),
-    finiteNonNegativeNumber(consensus.star2Count),
-    finiteNonNegativeNumber(consensus.star3Count),
-    finiteNonNegativeNumber(consensus.star4Count),
-    finiteNonNegativeNumber(consensus.star5Count),
+    finiteNonNegativeInteger(consensus.star1Count),
+    finiteNonNegativeInteger(consensus.star2Count),
+    finiteNonNegativeInteger(consensus.star3Count),
+    finiteNonNegativeInteger(consensus.star4Count),
+    finiteNonNegativeInteger(consensus.star5Count),
   ];
   if (!counts.every((count): count is number => count !== null)) return [];
 
@@ -313,7 +365,7 @@ function distributionEvidence(
   const consensus = observation.ratingConsensus;
 
   if (!consensus) return emptyDistributionEvidence();
-  const reviewsCount = finiteNonNegativeNumber(consensus.totalDistributionCount);
+  const reviewsCount = finiteNonNegativeInteger(consensus.totalDistributionCount);
   const ratingGroups = ratingGroupsForConsensus(consensus);
   const distributionSource = ratingDistributionSource(consensus.distributionSource);
   const distributionScope = ratingDistributionScope(consensus.distributionScope);
@@ -324,7 +376,7 @@ function distributionEvidence(
     distributionSource,
     distributionScope,
   });
-  const ratingConsensusQuality = finiteNonNegativeNumber(consensus.ratingConsensusQuality);
+  const ratingConsensusQuality = finiteConsensusScore(consensus.ratingConsensusQuality);
 
   return {
     status,
@@ -332,10 +384,22 @@ function distributionEvidence(
     ratingGroups,
     ratingConsensusStatus: ratingConsensusStatus ?? null,
     ratingConsensusQuality: status === "usable" ? ratingConsensusQuality : null,
-    provisionalRatingConsensusQuality: finiteNonNegativeNumber(consensus.provisionalRatingConsensusQuality),
+    provisionalRatingConsensusQuality: status === "provisional"
+      ? finiteConsensusScore(consensus.provisionalRatingConsensusQuality)
+      : null,
     distributionSource,
     distributionScope,
     distributionComposition: nonEmptyString(consensus.distributionComposition) ?? null,
+    mean: finiteNonNegativeNumber(consensus.mean),
+    standardDeviation: finiteNonNegativeNumber(consensus.standardDeviation),
+    variance: finiteNonNegativeNumber(consensus.variance),
+    qualityGate: finiteConsensusScore(consensus.qualityGate),
+    shapeSupport: finiteConsensusScore(consensus.shapeSupport),
+    lowTailPenalty: finiteNonNegativeNumber(consensus.lowTailPenalty),
+    aggregateAverageRating: finiteNonNegativeNumber(consensus.aggregateAverageRating),
+    aggregateRatingDelta: finiteNonNegativeNumber(consensus.aggregateRatingDelta),
+    aggregateRatingMismatchThreshold: finiteNonNegativeNumber(consensus.aggregateRatingMismatchThreshold),
+    calculationMethod: nonEmptyString(consensus.calculationMethod) ?? null,
   };
 }
 
@@ -708,6 +772,16 @@ function safeValidatedReviewMetadata(evidence: NormalizedReviewsValidatedEvidenc
     ratingConsensusStar3Count: evidence.distributionEvidence.ratingGroups.find((group) => group.star === 3)?.count,
     ratingConsensusStar4Count: evidence.distributionEvidence.ratingGroups.find((group) => group.star === 4)?.count,
     ratingConsensusStar5Count: evidence.distributionEvidence.ratingGroups.find((group) => group.star === 5)?.count,
+    ratingConsensusMean: evidence.distributionEvidence.mean,
+    ratingConsensusStandardDeviation: evidence.distributionEvidence.standardDeviation,
+    ratingConsensusVariance: evidence.distributionEvidence.variance,
+    ratingConsensusQualityGate: evidence.distributionEvidence.qualityGate,
+    ratingConsensusShapeSupport: evidence.distributionEvidence.shapeSupport,
+    ratingConsensusLowTailPenalty: evidence.distributionEvidence.lowTailPenalty,
+    ratingConsensusAggregateAverageRating: evidence.distributionEvidence.aggregateAverageRating,
+    ratingConsensusAggregateRatingDelta: evidence.distributionEvidence.aggregateRatingDelta,
+    ratingConsensusAggregateRatingMismatchThreshold: evidence.distributionEvidence.aggregateRatingMismatchThreshold,
+    ratingConsensusQualityCalculationMethod: evidence.distributionEvidence.calculationMethod,
     detailedReviewTaskCost: evidence.cost.taskCost,
     detailedReviewObservationCost: evidence.cost.observationCost,
     sourceCost: evidence.cost.sourceCostCompatibleValue,

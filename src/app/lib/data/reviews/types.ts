@@ -303,6 +303,16 @@ export interface NormalizedReviewDistributionEvidence {
   distributionSource: RatingDistributionSource | null;
   distributionScope: RatingDistributionScope | null;
   distributionComposition: string | null;
+  mean: number | null;
+  standardDeviation: number | null;
+  variance: number | null;
+  qualityGate: number | null;
+  shapeSupport: number | null;
+  lowTailPenalty: number | null;
+  aggregateAverageRating: number | null;
+  aggregateRatingDelta: number | null;
+  aggregateRatingMismatchThreshold: number | null;
+  calculationMethod: string | null;
 }
 
 export interface NormalizedTextReviewEvidence {

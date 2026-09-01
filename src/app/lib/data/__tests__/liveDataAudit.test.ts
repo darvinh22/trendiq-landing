@@ -8,6 +8,7 @@ import { mockTrendSignalProviders } from "../providers";
 import { aggregateSignals } from "../signalAggregator";
 import { buildProductTrendSnapshot } from "../snapshotEngine";
 import { buildTrendIQSnapshotProvenanceSummary } from "../liveDataAudit";
+import type { NormalizedTrendSignal } from "../types";
 
 function dataForSeoOnlyAudit() {
   const rawSignals = VALIDATED_RAY_BAN_META_LIVE_SNAPSHOT.rawSignals.filter((signal) =>
@@ -160,5 +161,60 @@ describe("live data audit", () => {
     expect(growthComponent?.fields.find((field) =>
       field.engineField === "accelerationPercent"
     )?.provenance).toBe("derived-live");
+  });
+
+  it("counts validated rating consensus as rating-consensus coverage without textual-review coverage", () => {
+    const timestamp = "2026-09-01T12:00:00.000Z";
+    const rawSignals: NormalizedTrendSignal[] = [
+      {
+        source: "reviews",
+        signalType: "reviewQuality",
+        productId: RAY_BAN_META_PRODUCT_ID,
+        sourceProvenance: {
+          mode: "derived-live",
+          provider: "dataforseo_google_shopping_reviews",
+          providerLabel: "DataForSEO Google Shopping Reviews",
+          providerMetric: "ratingConsensusQuality",
+        },
+        value: 78.9,
+        normalizedValue: 78.9,
+        sampleSize: 200,
+        timestamp,
+        confidence: 87,
+        metadata: {
+          provider: "dataforseo_google_shopping_reviews",
+          providerMetric: "ratingConsensusQuality",
+          engineField: "ratingConsensusQuality",
+          engineValue: 78.9,
+          ratingConsensusDistributionSource: "provider_rating_groups",
+          ratingConsensusDistributionScope: "full_provider_distribution",
+        },
+      },
+    ];
+    const aggregation = aggregateSignals(RAY_BAN_META_PRODUCT_ID, rawSignals, timestamp);
+    const trendIQScore = calculateTrendIQScore(aggregation.aggregatedSignals);
+    const confidence = calculateConfidenceScore(aggregation.confidenceSignals);
+    const trendStatus = calculateTrendMomentum({
+      changePercent: aggregation.aggregatedSignals.growthVelocity.trendChangePercent,
+    });
+    const audit = buildTrendIQSnapshotProvenanceSummary({
+      sourceMode: "live",
+      rawSignals: aggregation.rawSignals,
+      trendIQScore,
+      confidence,
+      trendStatus,
+    });
+    const reviewComponent = audit.componentSummaries.find((component) => component.component === "reviewQuality");
+
+    expect(reviewComponent?.fields.map((field) => field.engineField)).toEqual(["ratingConsensusQuality"]);
+    expect(reviewComponent?.fields.find((field) =>
+      field.engineField === "ratingConsensusQuality"
+    )?.provenance).toBe("derived-live");
+    expect(reviewComponent?.fields.find((field) =>
+      field.engineField === "recentAverageRating"
+    )).toBeUndefined();
+    expect(reviewComponent?.liveBackedWeight).toBe(0.0225);
+    expect(reviewComponent?.mockFallbackWeight).toBe(0);
+    expect(reviewComponent?.liveCoveragePercent).toBe(100);
   });
 });

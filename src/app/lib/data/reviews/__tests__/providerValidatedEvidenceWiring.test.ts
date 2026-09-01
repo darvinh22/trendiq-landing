@@ -7,6 +7,7 @@ import { RAY_BAN_META_SIGNAL_INPUTS } from "../../mockProviderSignals";
 import {
   ReviewQualitySignalProvider,
   buildValidatedDetailedReviewSignalResult,
+  mergeLiveReviewSignalsWithMockFallback,
 } from "../../providers/reviewsProvider";
 import type {
   GoogleShoppingProductIdentifier,
@@ -423,6 +424,11 @@ describe("production validated-review evidence wiring", () => {
       ratingConsensus: ratingConsensus({
         distributionSource: "provider_rating_groups",
         distributionScope: "full_provider_distribution",
+        star1Count: 12,
+        star2Count: 18,
+        star3Count: 60,
+        star4Count: 330,
+        star5Count: 780,
         totalDistributionCount: 1200,
         ratingConsensusQuality: 82.4,
       }),
@@ -552,6 +558,72 @@ describe("production validated-review evidence wiring", () => {
       averageRating: 1,
       ratingEvidenceCount: 1,
     });
+  });
+
+  it("keeps validated rating consensus ahead of mock fallback without duplicate engine fields", () => {
+    const fixture = productFixtures[0];
+    const live = buildValidatedDetailedReviewSignalResult({
+      productId: fixture.identity.productId,
+      status: "reviews_validated",
+      recentReviews: recentReviewsObservation(fixture),
+    }).signals;
+    const fallbackRatingConsensus = {
+      source: "reviews",
+      signalType: "reviewQuality",
+      productId: fixture.identity.productId,
+      sourceProvenance: {
+        mode: "mock",
+        provider: "mock_reviews",
+        providerLabel: "Product reviews",
+        providerMetric: "ratingConsensusQuality",
+      },
+      value: 1,
+      normalizedValue: 1,
+      sampleSize: 1,
+      timestamp: now.toISOString(),
+      confidence: 1,
+      metadata: {
+        provider: "mock_reviews",
+        providerMetric: "ratingConsensusQuality",
+        engineField: "ratingConsensusQuality",
+        engineValue: 1,
+      },
+    } as const;
+    const fallbackAverageRating = {
+      ...fallbackRatingConsensus,
+      sourceProvenance: {
+        ...fallbackRatingConsensus.sourceProvenance,
+        providerMetric: "averageRating",
+      },
+      metadata: {
+        ...fallbackRatingConsensus.metadata,
+        providerMetric: "averageRating",
+        engineField: "averageRating",
+        engineValue: 4,
+      },
+      value: 4,
+      normalizedValue: 50,
+    } as const;
+    const mergedA = mergeLiveReviewSignalsWithMockFallback(live, [
+      fallbackRatingConsensus,
+      fallbackAverageRating,
+    ]);
+    const mergedB = mergeLiveReviewSignalsWithMockFallback(live, [
+      fallbackAverageRating,
+      fallbackRatingConsensus,
+    ]);
+
+    for (const merged of [mergedA, mergedB]) {
+      expect(engineFieldCounts(merged)).toEqual({
+        averageRating: 1,
+        ratingConsensusQuality: 1,
+        recentAverageRating: 1,
+      });
+      expect(signalsByEngineField(merged).get("ratingConsensusQuality")?.value).toBe(78.9);
+      expect(signalsByEngineField(merged).get("ratingConsensusQuality")?.sourceProvenance.mode)
+        .toBe("derived-live");
+      expect(signalsByEngineField(merged).get("averageRating")?.sourceProvenance.mode).toBe("fallback");
+    }
   });
 
   it("keeps score, confidence, and momentum engines frozen when validated details are absent", () => {

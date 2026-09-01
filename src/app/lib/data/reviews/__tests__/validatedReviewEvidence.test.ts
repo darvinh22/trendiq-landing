@@ -219,6 +219,11 @@ describe("normalized validated review evidence", () => {
       ratingConsensus: ratingConsensus({
         distributionSource: "provider_rating_groups",
         distributionScope: "full_provider_distribution",
+        star1Count: 12,
+        star2Count: 18,
+        star3Count: 60,
+        star4Count: 330,
+        star5Count: 780,
         totalDistributionCount: 1200,
         ratingConsensusQuality: 82.4,
       }),
@@ -479,6 +484,117 @@ describe("normalized validated review evidence", () => {
     expect(evidence.ratingConsensusStatus).toBe("derived-live");
     expect(evidence.ratingConsensusQuality).toBeNull();
     expect(signals.map((signal) => signal.metadata?.engineField)).toEqual(["recentAverageRating"]);
+  });
+
+  it("fails closed when distribution source and scope conflict", () => {
+    const evidence = normalize(products[1].identity.productId, {
+      ratingConsensus: ratingConsensus({
+        distributionSource: "review_items",
+        distributionScope: "full_provider_distribution",
+      }),
+    });
+    const signals = buildReviewQualitySignalsFromValidatedEvidence({ evidence });
+
+    expect(evidence.status).toBe("reviews_validated");
+    expect(evidence.distributionEvidenceStatus).toBe("unavailable");
+    expect(evidence.distributionSource).toBe("review_items");
+    expect(evidence.distributionScope).toBe("full_provider_distribution");
+    expect(evidence.ratingConsensusQuality).toBeNull();
+    expect(signals.map((signal) => signal.metadata?.engineField)).toEqual(["recentAverageRating"]);
+  });
+
+  it("fails closed for impossible distribution totals", () => {
+    const evidence = normalize(products[2].identity.productId, {
+      ratingConsensus: ratingConsensus({
+        totalDistributionCount: 201,
+      }),
+    });
+    const signals = buildReviewQualitySignalsFromValidatedEvidence({ evidence });
+
+    expect(evidence.distributionEvidenceStatus).toBe("unavailable");
+    expect(evidence.distributionEvidence.reviewsCount).toBe(201);
+    expect(evidence.distributionEvidence.ratingGroups.reduce((sum, group) => sum + group.count, 0)).toBe(200);
+    expect(evidence.ratingConsensusQuality).toBeNull();
+    expect(signals.map((signal) => signal.metadata?.engineField)).toEqual(["recentAverageRating"]);
+  });
+
+  it("fails closed for fractional distribution bucket counts", () => {
+    const evidence = normalize(products[2].identity.productId, {
+      ratingConsensus: ratingConsensus({
+        star3Count: 10.5,
+        totalDistributionCount: 200.5,
+      }),
+    });
+    const signals = buildReviewQualitySignalsFromValidatedEvidence({ evidence });
+
+    expect(evidence.distributionEvidenceStatus).toBe("unavailable");
+    expect(evidence.distributionEvidence.reviewsCount).toBeNull();
+    expect(evidence.distributionEvidence.ratingGroups).toEqual([]);
+    expect(evidence.ratingConsensusQuality).toBeNull();
+    expect(signals.map((signal) => signal.metadata?.engineField)).toEqual(["recentAverageRating"]);
+  });
+
+  it("does not emit out-of-bounds rating consensus quality", () => {
+    const evidence = normalize(products[3].identity.productId, {
+      ratingConsensus: ratingConsensus({
+        ratingConsensusQuality: 101,
+      }),
+    });
+    const signals = buildReviewQualitySignalsFromValidatedEvidence({ evidence });
+
+    expect(evidence.distributionEvidenceStatus).toBe("unavailable");
+    expect(evidence.ratingConsensusQuality).toBeNull();
+    expect(signals.map((signal) => signal.metadata?.engineField)).toEqual(["recentAverageRating"]);
+  });
+
+  it("preserves safe rating consensus calculation provenance without provider identifiers", () => {
+    const evidence = normalize();
+    const signals = buildReviewQualitySignalsFromValidatedEvidence({ evidence });
+    const consensusSignal = signals.find((signal) => signal.metadata?.engineField === "ratingConsensusQuality");
+    const serializedConsensusSignal = providerIdLeakText(consensusSignal);
+
+    expect(evidence.distributionEvidence).toMatchObject({
+      mean: 4.54,
+      standardDeviation: 0.79,
+      variance: 0.63,
+      qualityGate: 90.8,
+      shapeSupport: 88.5,
+      lowTailPenalty: 1.5,
+      aggregateAverageRating: 4.5,
+      aggregateRatingDelta: 0.04,
+      aggregateRatingMismatchThreshold: 0.75,
+      calculationMethod: "distribution_adjusted_rating_consensus_quality_v1",
+    });
+    expect(consensusSignal?.metadata).toMatchObject({
+      ratingConsensusDistributionSource: "provider_rating_groups",
+      ratingConsensusDistributionScope: "full_provider_distribution",
+      ratingConsensusMean: 4.54,
+      ratingConsensusStandardDeviation: 0.79,
+      ratingConsensusVariance: 0.63,
+      ratingConsensusQualityGate: 90.8,
+      ratingConsensusShapeSupport: 88.5,
+      ratingConsensusLowTailPenalty: 1.5,
+      ratingConsensusAggregateAverageRating: 4.5,
+      ratingConsensusAggregateRatingDelta: 0.04,
+      ratingConsensusAggregateRatingMismatchThreshold: 0.75,
+      ratingConsensusQualityCalculationMethod: "distribution_adjusted_rating_consensus_quality_v1",
+    });
+
+    for (const forbidden of [
+      "provider-gid-must-not-leak",
+      "provider-product-id-must-not-leak",
+      "provider-data-docid-must-not-leak",
+      "provider-task-must-not-leak",
+      "providerGid",
+      "providerProductId",
+      "providerDataDocid",
+      "recentReviewsProviderGid",
+      "taskId",
+      "gid",
+      "dataDocid",
+    ]) {
+      expect(serializedConsensusSignal).not.toContain(forbidden);
+    }
   });
 
   it("does not emit text signals for non-finite text evidence numbers", () => {

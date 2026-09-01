@@ -9,6 +9,8 @@ export const RATING_CONSENSUS_PROVISIONAL_SAMPLE_SIZE = 30;
 // full product consensus.
 export const RATING_CONSENSUS_SAMPLE_MEAN_MISMATCH_THRESHOLD = 0.75;
 
+// ratingConsensusQuality is a bounded rating-distribution consensus score only;
+// it is not text quality, sentiment/theme evidence, authenticity, or identity confidence.
 export const RATING_CONSENSUS_CALCULATION_METHOD =
   "distribution_adjusted_rating_consensus_quality_v1";
 
@@ -41,8 +43,63 @@ function starCounts(input: RatingDistributionInput): number[] {
   ];
 }
 
+function emptyCalculation(): RatingConsensusCalculation {
+  return {
+    totalDistributionCount: 0,
+    mean: 0,
+    variance: 0,
+    standardDeviation: 0,
+    qualityGate: 0,
+    shapeSupport: 0,
+    lowTailPenalty: 0,
+    ratingConsensusQuality: 0,
+  };
+}
+
+function safeCount(value: number): number {
+  return Number.isFinite(value) && Number.isInteger(value) && value >= 0 ? value : 0;
+}
+
+function safeDistributionInput(input: RatingDistributionInput): RatingDistributionInput {
+  return {
+    ...input,
+    star1Count: safeCount(input.star1Count),
+    star2Count: safeCount(input.star2Count),
+    star3Count: safeCount(input.star3Count),
+    star4Count: safeCount(input.star4Count),
+    star5Count: safeCount(input.star5Count),
+  };
+}
+
+function sourceScopePairIsValid(input: RatingDistributionInput): boolean {
+  if (input.distributionSource === "provider_rating_groups") {
+    return input.distributionScope === "full_provider_distribution";
+  }
+
+  if (input.distributionSource === "review_items") {
+    return input.distributionScope === "fetched_review_sample";
+  }
+
+  return false;
+}
+
+function distributionIntegrityIssue(input: RatingDistributionInput): boolean {
+  const counts = starCounts(input);
+
+  return (
+    !counts.every((count) => Number.isFinite(count) && Number.isInteger(count) && count >= 0) ||
+    !sourceScopePairIsValid(input) ||
+    typeof input.distributionComposition !== "string" ||
+    !input.distributionComposition.trim()
+  );
+}
+
 function calculateRawRatingConsensus(input: RatingDistributionInput): RatingConsensusCalculation {
+  if (distributionIntegrityIssue(input)) return emptyCalculation();
+
   const totalDistributionCount = totalCount(input);
+  if (!Number.isFinite(totalDistributionCount) || totalDistributionCount <= 0) return emptyCalculation();
+
   const counts = starCounts(input);
   const probabilities = counts.map((count) => totalDistributionCount > 0 ? count / totalDistributionCount : 0);
   const mean = probabilities.reduce((sum, probability, index) => sum + (index + 1) * probability, 0);
@@ -83,10 +140,11 @@ export function calculateRatingConsensusQuality(input: RatingDistributionInput):
   | "aggregateRatingDelta"
   | "aggregateRatingMismatchThreshold"
 > {
+  const safeInput = safeDistributionInput(input);
   const calculated = calculateRawRatingConsensus(input);
 
   return {
-    ...input,
+    ...safeInput,
     totalDistributionCount: calculated.totalDistributionCount,
     mean: roundTo(calculated.mean, 4),
     standardDeviation: roundTo(calculated.standardDeviation, 4),
@@ -106,19 +164,30 @@ export function buildRatingConsensusQuality(input: RatingDistributionInput & {
 }): RatingConsensusQualityResult {
   const calculated = calculateRawRatingConsensus(input);
   const base = calculateRatingConsensusQuality(input);
+  const hasIntegrityIssue = distributionIntegrityIssue(input) || base.totalDistributionCount <= 0;
   const minimumScoringSampleSize = input.minimumScoringSampleSize ?? RATING_CONSENSUS_MIN_SCORING_SAMPLE_SIZE;
   const provisionalSampleSize = input.provisionalSampleSize ?? RATING_CONSENSUS_PROVISIONAL_SAMPLE_SIZE;
   const mismatchThreshold = input.mismatchThreshold ?? RATING_CONSENSUS_SAMPLE_MEAN_MISMATCH_THRESHOLD;
   const aggregateAverageRating = typeof input.aggregateAverageRating === "number"
     ? input.aggregateAverageRating
     : undefined;
-  const aggregateRatingDelta = typeof aggregateAverageRating === "number"
+  const aggregateRatingDelta = !hasIntegrityIssue && typeof aggregateAverageRating === "number"
     ? roundTo(Math.abs(base.mean - aggregateAverageRating), 4)
     : undefined;
   const hasSampleMismatch = input.distributionSource === "review_items" &&
     typeof aggregateRatingDelta === "number" &&
     aggregateRatingDelta > mismatchThreshold;
   const computedQuality = roundTo(calculated.ratingConsensusQuality, 1);
+
+  if (hasIntegrityIssue) {
+    return {
+      ...base,
+      status: "insufficient",
+      aggregateAverageRating,
+      aggregateRatingDelta,
+      aggregateRatingMismatchThreshold: mismatchThreshold,
+    };
+  }
 
   if (hasSampleMismatch) {
     return {
