@@ -10,6 +10,7 @@ import type {
   GoogleShoppingReviewsClient,
   GoogleShoppingReviewObservation,
   RatingConsensusQualityResult,
+  ReviewSignalBuildResult,
 } from "../types";
 import { readReviewProviderConfig } from "../config";
 import {
@@ -117,6 +118,15 @@ function ratingConsensus(
   };
 }
 
+function semanticallyValidatedObservation(
+  overrides: Partial<GoogleShoppingReviewObservation> = {}
+): GoogleShoppingReviewObservation {
+  return observation({
+    matchedProductTitle: "Ray-Ban Meta Smart Glasses",
+    ...overrides,
+  });
+}
+
 class FixtureReviewClient implements GoogleShoppingReviewsClient {
   readonly calls: Array<{ productId: string; locationCode: number; languageCode: string }> = [];
 
@@ -182,6 +192,22 @@ function unavailableRecentReviewsClient(): FixtureRecentReviewsClient {
   return new FixtureRecentReviewsClient(undefined, new Error("recent reviews not requested"));
 }
 
+class RecordingCache<T> {
+  value?: T;
+
+  get(): T | undefined {
+    return undefined;
+  }
+
+  set(_key: string, value: T): void {
+    this.value = value;
+  }
+
+  clear(): void {
+    this.value = undefined;
+  }
+}
+
 function liveConfig(overrides: Parameters<typeof readReviewProviderConfig>[1] = {}) {
   return readReviewProviderConfig({}, {
     mode: "live",
@@ -195,7 +221,7 @@ function liveConfig(overrides: Parameters<typeof readReviewProviderConfig>[1] = 
 
 describe("ReviewQualitySignalProvider", () => {
   it("uses high-confidence Google Shopping averageRating and ratingEvidenceCount", async () => {
-    const client = new FixtureReviewClient(observation());
+    const client = new FixtureReviewClient(semanticallyValidatedObservation());
     const recentReviewsClient = unavailableRecentReviewsClient();
     const provider = new ReviewQualitySignalProvider(liveConfig(), { client, recentReviewsClient });
     const signals = await provider.getSignalsAsync(RAY_BAN_META_PRODUCT_ID);
@@ -230,7 +256,7 @@ describe("ReviewQualitySignalProvider", () => {
   });
 
   it("uses derived-live recentAverageRating when the 90-day sample meets the scoring guardrail", async () => {
-    const client = new FixtureReviewClient(observation());
+    const client = new FixtureReviewClient(semanticallyValidatedObservation());
     const recentReviewsClient = new FixtureRecentReviewsClient(recentReviewsObservation());
     const provider = new ReviewQualitySignalProvider(liveConfig(), { client, recentReviewsClient });
     const signals = await provider.getSignalsAsync(RAY_BAN_META_PRODUCT_ID);
@@ -256,7 +282,7 @@ describe("ReviewQualitySignalProvider", () => {
   });
 
   it("uses derived-live ratingConsensusQuality when distribution observations meet the scoring guardrail", async () => {
-    const client = new FixtureReviewClient(observation());
+    const client = new FixtureReviewClient(semanticallyValidatedObservation());
     const recentReviewsClient = new FixtureRecentReviewsClient(recentReviewsObservation({
       ratingConsensus: ratingConsensus(),
     }));
@@ -276,11 +302,11 @@ describe("ReviewQualitySignalProvider", () => {
     expect(ratingConsensusQuality?.metadata?.ratingConsensusStar3Count).toBe(2);
     expect(ratingConsensusQuality?.metadata?.ratingConsensusStar4Count).toBe(198);
     expect(ratingConsensusQuality?.metadata?.ratingConsensusDistributionScope).toBe("fetched_review_sample");
-    expect(ratingConsensusQuality?.metadata?.ratingConsensusAggregateRatingDelta).toBe(0.41);
   });
 
   it("keeps 30-99 ratingConsensusQuality observations provisional without replacing scoring fallback", async () => {
-    const client = new FixtureReviewClient(observation());
+    const client = new FixtureReviewClient(semanticallyValidatedObservation());
+    const cache = new RecordingCache<ReviewSignalBuildResult>();
     const recentReviewsClient = new FixtureRecentReviewsClient(recentReviewsObservation({
       ratingConsensus: ratingConsensus({
         totalDistributionCount: 99,
@@ -291,18 +317,21 @@ describe("ReviewQualitySignalProvider", () => {
         provisionalRatingConsensusQuality: 80,
       }),
     }));
-    const provider = new ReviewQualitySignalProvider(liveConfig(), { client, recentReviewsClient });
+    const provider = new ReviewQualitySignalProvider(liveConfig(), { client, recentReviewsClient, cache });
     const signals = await provider.getSignalsAsync(RAY_BAN_META_PRODUCT_ID);
     const byEngineField = new Map(signals.map((signal) => [signal.metadata?.engineField, signal]));
+    const evidence = cache.value?.validatedDetailedReviewEvidence;
 
-    expect(byEngineField.get("averageRating")?.metadata?.ratingConsensusQualityStatus).toBe("provisional");
-    expect(byEngineField.get("averageRating")?.metadata?.provisionalRatingConsensusQuality).toBe(80);
+    expect(evidence?.status).toBe("reviews_validated");
+    expect(evidence?.distributionEvidenceStatus).toBe("provisional");
+    expect(evidence?.distributionEvidence.provisionalRatingConsensusQuality).toBe(80);
     expect(byEngineField.get("ratingConsensusQuality")?.value).toBe(85);
     expect(byEngineField.get("ratingConsensusQuality")?.sourceProvenance.mode).toBe("fallback");
   });
 
   it("keeps ratingConsensusQuality fallback below the provisional floor", async () => {
-    const client = new FixtureReviewClient(observation());
+    const client = new FixtureReviewClient(semanticallyValidatedObservation());
+    const cache = new RecordingCache<ReviewSignalBuildResult>();
     const recentReviewsClient = new FixtureRecentReviewsClient(recentReviewsObservation({
       ratingConsensus: ratingConsensus({
         totalDistributionCount: 29,
@@ -312,17 +341,20 @@ describe("ReviewQualitySignalProvider", () => {
         ratingConsensusQuality: undefined,
       }),
     }));
-    const provider = new ReviewQualitySignalProvider(liveConfig(), { client, recentReviewsClient });
+    const provider = new ReviewQualitySignalProvider(liveConfig(), { client, recentReviewsClient, cache });
     const signals = await provider.getSignalsAsync(RAY_BAN_META_PRODUCT_ID);
     const byEngineField = new Map(signals.map((signal) => [signal.metadata?.engineField, signal]));
+    const evidence = cache.value?.validatedDetailedReviewEvidence;
 
-    expect(byEngineField.get("averageRating")?.metadata?.ratingConsensusQualityStatus).toBe("insufficient");
+    expect(evidence?.status).toBe("reviews_validated");
+    expect(evidence?.distributionEvidenceStatus).toBe("insufficient");
     expect(byEngineField.get("ratingConsensusQuality")?.value).toBe(85);
     expect(byEngineField.get("ratingConsensusQuality")?.sourceProvenance.mode).toBe("fallback");
   });
 
   it("keeps ratingConsensusQuality fallback when the sampled distribution mismatches aggregate averageRating", async () => {
-    const client = new FixtureReviewClient(observation());
+    const client = new FixtureReviewClient(semanticallyValidatedObservation());
+    const cache = new RecordingCache<ReviewSignalBuildResult>();
     const recentReviewsClient = new FixtureRecentReviewsClient(recentReviewsObservation({
       ratingConsensus: ratingConsensus({
         totalDistributionCount: 100,
@@ -336,18 +368,21 @@ describe("ReviewQualitySignalProvider", () => {
         aggregateRatingDelta: 1.1,
       }),
     }));
-    const provider = new ReviewQualitySignalProvider(liveConfig(), { client, recentReviewsClient });
+    const provider = new ReviewQualitySignalProvider(liveConfig(), { client, recentReviewsClient, cache });
     const signals = await provider.getSignalsAsync(RAY_BAN_META_PRODUCT_ID);
     const byEngineField = new Map(signals.map((signal) => [signal.metadata?.engineField, signal]));
+    const evidence = cache.value?.validatedDetailedReviewEvidence;
 
-    expect(byEngineField.get("averageRating")?.metadata?.ratingConsensusQualityStatus).toBe("mismatch");
-    expect(byEngineField.get("averageRating")?.metadata?.ratingConsensusAggregateRatingDelta).toBe(1.1);
+    expect(evidence?.status).toBe("reviews_validated");
+    expect(evidence?.distributionEvidenceStatus).toBe("mismatch");
+    expect(evidence?.ratingConsensusQuality).toBeNull();
     expect(byEngineField.get("ratingConsensusQuality")?.value).toBe(85);
     expect(byEngineField.get("ratingConsensusQuality")?.sourceProvenance.mode).toBe("fallback");
   });
 
   it("keeps 10-29 recent reviews as provisional metadata without replacing the scoring fallback", async () => {
-    const client = new FixtureReviewClient(observation());
+    const client = new FixtureReviewClient(semanticallyValidatedObservation());
+    const cache = new RecordingCache<ReviewSignalBuildResult>();
     const recentReviews = recentReviewsObservation({
       status: "provisional",
       provisionalRecentAverageRating: 4.8,
@@ -357,22 +392,24 @@ describe("ReviewQualitySignalProvider", () => {
     });
     delete recentReviews.recentAverageRating;
     const recentReviewsClient = new FixtureRecentReviewsClient(recentReviews);
-    const provider = new ReviewQualitySignalProvider(liveConfig(), { client, recentReviewsClient });
+    const provider = new ReviewQualitySignalProvider(liveConfig(), { client, recentReviewsClient, cache });
     const signals = await provider.getSignalsAsync(RAY_BAN_META_PRODUCT_ID);
     const byEngineField = new Map(signals.map((signal) => [signal.metadata?.engineField, signal]));
-    const averageRating = byEngineField.get("averageRating");
     const recentAverageRating = byEngineField.get("recentAverageRating");
+    const evidence = cache.value?.validatedDetailedReviewEvidence;
 
-    expect(averageRating?.metadata?.recentAverageRatingStatus).toBe("provisional");
-    expect(averageRating?.metadata?.provisionalRecentAverageRating).toBe(4.8);
-    expect(averageRating?.metadata?.qualifyingRecentReviewCount).toBe(20);
+    expect(evidence?.status).toBe("reviews_validated");
+    expect(evidence?.textEvidenceStatus).toBe("provisional");
+    expect(evidence?.textEvidence.provisionalRecentAverageRating).toBe(4.8);
+    expect(evidence?.qualifyingReviewCount).toBe(20);
     expect(recentAverageRating?.value).toBe(4.3);
     expect(recentAverageRating?.sourceProvenance.mode).toBe("fallback");
     expect(recentAverageRating?.metadata?.provider).toBe("mock_reviews");
   });
 
   it("keeps recentAverageRating fallback when the recent sample is below the provisional floor", async () => {
-    const client = new FixtureReviewClient(observation());
+    const client = new FixtureReviewClient(semanticallyValidatedObservation());
+    const cache = new RecordingCache<ReviewSignalBuildResult>();
     const recentReviews = recentReviewsObservation({
       status: "insufficient",
       totalReviewsFetched: 9,
@@ -383,12 +420,15 @@ describe("ReviewQualitySignalProvider", () => {
     const provider = new ReviewQualitySignalProvider(liveConfig(), {
       client,
       recentReviewsClient: new FixtureRecentReviewsClient(recentReviews),
+      cache,
     });
     const signals = await provider.getSignalsAsync(RAY_BAN_META_PRODUCT_ID);
     const byEngineField = new Map(signals.map((signal) => [signal.metadata?.engineField, signal]));
+    const evidence = cache.value?.validatedDetailedReviewEvidence;
 
-    expect(byEngineField.get("averageRating")?.metadata?.recentAverageRatingStatus).toBe("insufficient");
-    expect(byEngineField.get("averageRating")?.metadata?.qualifyingRecentReviewCount).toBe(9);
+    expect(evidence?.status).toBe("reviews_validated");
+    expect(evidence?.textEvidenceStatus).toBe("insufficient");
+    expect(evidence?.qualifyingReviewCount).toBe(9);
     expect(byEngineField.get("recentAverageRating")?.value).toBe(4.3);
     expect(byEngineField.get("recentAverageRating")?.sourceProvenance.mode).toBe("fallback");
   });
@@ -416,7 +456,7 @@ describe("ReviewQualitySignalProvider", () => {
   });
 
   it("falls back without a live request when review credentials are unavailable", async () => {
-    const client = new FixtureReviewClient(observation());
+    const client = new FixtureReviewClient(semanticallyValidatedObservation());
     const provider = new ReviewQualitySignalProvider(readReviewProviderConfig({}, {
       mode: "live",
       now: () => now,
@@ -504,7 +544,7 @@ describe("ReviewQualitySignalProvider", () => {
   });
 
   it("updates recentAverageRating score inputs only when the scoring guardrail is satisfied", async () => {
-    const client = new FixtureReviewClient(observation());
+    const client = new FixtureReviewClient(semanticallyValidatedObservation());
     const provider = new ReviewQualitySignalProvider(liveConfig(), {
       client,
       recentReviewsClient: new FixtureRecentReviewsClient(recentReviewsObservation()),

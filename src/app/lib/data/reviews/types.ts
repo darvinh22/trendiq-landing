@@ -373,4 +373,5 @@ export interface ReviewSignalBuildResult {
   signals: NormalizedTrendSignal[];
   observation: GoogleShoppingReviewObservation;
   recentReviews?: GoogleShoppingRecentReviewsObservation;
+  validatedDetailedReviewEvidence?: NormalizedValidatedReviewEvidence;
 }

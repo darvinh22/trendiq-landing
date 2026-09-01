@@ -7,12 +7,20 @@ import {
   DataForSeoGoogleShoppingProductsClient,
   buildReviewProductIdentityFromProfile,
   buildReviewQualitySignalsFromObservation,
+  buildReviewQualitySignalsFromValidatedEvidence,
+  createEphemeralProviderIdentityFromAggregateObservation,
+  normalizeValidatedDetailedReviewEvidence,
   readReviewProviderConfig,
   shouldUseLiveReviews,
+  type EphemeralProviderIdentity,
+  type GoogleShoppingRecentReviewsObservation,
+  type GoogleShoppingReviewObservation,
+  type NormalizedValidatedReviewEvidence,
   type GoogleShoppingRecentReviewsClient,
   type GoogleShoppingReviewsClient,
   type ReviewProviderConfig,
   type ReviewSignalBuildResult,
+  type ValidatedDetailedReviewEvidenceStatus,
 } from "../reviews";
 import type { AsyncTrendSignalProvider, NormalizedTrendSignal, TrendSignalProvider } from "../types";
 
@@ -189,6 +197,23 @@ export interface ReviewQualitySignalProviderDependencies {
   fallbackProvider?: TrendSignalProvider;
 }
 
+type DegradedDetailedReviewStatus = Exclude<ValidatedDetailedReviewEvidenceStatus, "reviews_validated">;
+
+type DetailedReviewRetrievalResult =
+  | {
+      status: "reviews_validated";
+      recentReviews: GoogleShoppingRecentReviewsObservation;
+    }
+  | {
+      status: DegradedDetailedReviewStatus;
+      reason: string;
+    };
+
+export interface ValidatedDetailedReviewSignalResult {
+  evidence: NormalizedValidatedReviewEvidence;
+  signals: NormalizedTrendSignal[];
+}
+
 function engineKey(signal: NormalizedTrendSignal): string | undefined {
   const field = signal.metadata?.engineField;
   return field ? `${signal.signalType}.${field}` : undefined;
@@ -219,6 +244,88 @@ export function mergeLiveReviewSignalsWithMockFallback(
     .map(asLiveFallbackSignal);
 
   return [...untouchedMockSignals, ...liveSignals];
+}
+
+function redactedDetailedReviewObservation(
+  recentReviews: GoogleShoppingRecentReviewsObservation
+): GoogleShoppingRecentReviewsObservation {
+  return {
+    ...recentReviews,
+    endpoint: "redacted_provider_endpoint",
+    identifiers: {},
+    reviews: [],
+  };
+}
+
+export function buildValidatedDetailedReviewSignalResult(input: {
+  productId: string;
+  status: ValidatedDetailedReviewEvidenceStatus;
+  recentReviews?: GoogleShoppingRecentReviewsObservation;
+  reason?: string;
+  taskCost?: number | null;
+  observationCost?: number | null;
+}): ValidatedDetailedReviewSignalResult {
+  const redactedObservation = input.recentReviews
+    ? redactedDetailedReviewObservation(input.recentReviews)
+    : undefined;
+  const evidence = normalizeValidatedDetailedReviewEvidence({
+    canonicalProductId: input.productId,
+    status: input.status,
+    recentReviews: redactedObservation,
+    reason: input.reason,
+    taskCost: input.taskCost,
+    observationCost: input.observationCost,
+  });
+
+  return {
+    evidence,
+    signals: buildReviewQualitySignalsFromValidatedEvidence({ evidence }),
+  };
+}
+
+function detailedReviewIdentityIssue(input: {
+  productId: string;
+  recentReviews: GoogleShoppingRecentReviewsObservation;
+  aggregateIdentity: EphemeralProviderIdentity;
+}): Extract<DetailedReviewRetrievalResult, { status: DegradedDetailedReviewStatus }> | undefined {
+  if (
+    input.aggregateIdentity.productId !== input.productId ||
+    input.recentReviews.productId !== input.productId
+  ) {
+    return {
+      status: "identity_inconclusive",
+      reason: "detailed_review_product_identity_mismatch",
+    };
+  }
+
+  if (input.recentReviews.provider !== input.aggregateIdentity.provider) {
+    return {
+      status: "malformed_response",
+      reason: "detailed_review_provider_mismatch",
+    };
+  }
+
+  const expected = input.aggregateIdentity.identifiers;
+  const observed = input.recentReviews.identifiers ?? {};
+  const optionalProductIdMismatch = expected.productId &&
+    observed.productId &&
+    expected.productId !== observed.productId;
+  const optionalDataDocidMismatch = expected.dataDocid &&
+    observed.dataDocid &&
+    expected.dataDocid !== observed.dataDocid;
+
+  if (
+    observed.gid !== expected.gid ||
+    optionalProductIdMismatch ||
+    optionalDataDocidMismatch
+  ) {
+    return {
+      status: "identity_inconclusive",
+      reason: "detailed_review_provider_identity_mismatch",
+    };
+  }
+
+  return undefined;
 }
 
 export class ReviewQualitySignalProvider implements AsyncTrendSignalProvider {
@@ -280,17 +387,29 @@ export class ReviewQualitySignalProvider implements AsyncTrendSignalProvider {
         locationCode: this.config.locationCode,
         languageCode: this.config.languageCode,
       });
-      const recentReviews = await this.getRecentReviews({
+      const detailedReviews = await this.getValidatedDetailedReviews({
         productId,
         identity,
         profile,
         observation,
       });
-      const result = buildReviewQualitySignalsFromObservation({
+      const aggregateResult = buildReviewQualitySignalsFromObservation({
         productId,
         observation,
-        recentReviews,
       });
+      const detailedReviewResult = buildValidatedDetailedReviewSignalResult({
+        productId,
+        status: detailedReviews.status,
+        recentReviews: detailedReviews.status === "reviews_validated" ? detailedReviews.recentReviews : undefined,
+        reason: detailedReviews.status === "reviews_validated" ? undefined : detailedReviews.reason,
+        taskCost: null,
+        observationCost: detailedReviews.status === "reviews_validated" ? detailedReviews.recentReviews.cost ?? null : null,
+      });
+      const result: ReviewSignalBuildResult = {
+        ...aggregateResult,
+        signals: [...aggregateResult.signals, ...detailedReviewResult.signals],
+        validatedDetailedReviewEvidence: detailedReviewResult.evidence,
+      };
 
       this.cache.set(cacheKey, result, this.config.cacheTtlMs, this.config.now().getTime());
       return mergeLiveReviewSignalsWithMockFallback(result.signals, this.fallbackProvider.getSignals(productId));
@@ -317,39 +436,79 @@ export class ReviewQualitySignalProvider implements AsyncTrendSignalProvider {
     ].join(":");
   }
 
-  private async getRecentReviews(input: {
+  private async getValidatedDetailedReviews(input: {
     productId: string;
     identity: NonNullable<ReviewProviderConfig["productIdentities"][string]>;
     profile: ProductProfile;
-    observation: Awaited<ReturnType<GoogleShoppingReviewsClient["getProductReviewAggregate"]>>;
-  }) {
+    observation: GoogleShoppingReviewObservation;
+  }): Promise<DetailedReviewRetrievalResult> {
+    const ephemeralIdentity = createEphemeralProviderIdentityFromAggregateObservation({
+      observation: input.observation,
+      identity: input.identity,
+      candidateMatchDecision: "match",
+    });
+
+    if (ephemeralIdentity.status !== "ready") {
+      return {
+        status: "identity_inconclusive",
+        reason: ephemeralIdentity.reason,
+      };
+    }
+
     try {
       const enrichedProfile = profileWithProviderIds(
         input.profile,
         "dataforseo_google_shopping_reviews",
-        input.observation.identifiers
+        ephemeralIdentity.identity.identifiers
       );
       const reviewsDecision = canUseProvider(
         enrichedProfile,
         "dataforseo_google_shopping_reviews",
         "reviews"
       );
-      if (!reviewsDecision.allowed) return undefined;
+      if (!reviewsDecision.allowed) {
+        return {
+          status: "identity_inconclusive",
+          reason: "detailed_review_capability_not_allowed",
+        };
+      }
 
       const client = this.dependencies.recentReviewsClient
         ?? new DataForSeoGoogleShoppingReviewsClient(this.config);
 
-      return await client.getRecentProductReviews({
+      const recentReviews = await client.getRecentProductReviews({
         productId: input.productId,
         identity: input.identity,
-        identifiers: input.observation.identifiers,
+        identifiers: ephemeralIdentity.identity.identifiers,
         locationCode: this.config.locationCode,
         languageCode: this.config.languageCode,
         snapshotTimestamp: this.config.now().toISOString(),
         aggregateAverageRating: input.observation.averageRating,
       });
+
+      if (!recentReviews) {
+        return {
+          status: "provider_no_result",
+          reason: "detailed_review_provider_no_result",
+        };
+      }
+
+      const identityIssue = detailedReviewIdentityIssue({
+        productId: input.productId,
+        recentReviews,
+        aggregateIdentity: ephemeralIdentity.identity,
+      });
+      if (identityIssue) return identityIssue;
+
+      return {
+        status: "reviews_validated",
+        recentReviews,
+      };
     } catch {
-      return undefined;
+      return {
+        status: "provider_error",
+        reason: "detailed_review_provider_error",
+      };
     }
   }
 
