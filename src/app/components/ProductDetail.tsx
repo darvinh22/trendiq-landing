@@ -8,10 +8,50 @@ import { ScoreBadge, ScoreBar } from "./ScoreBadge";
 import { TrendStatusBadge, trendColor } from "./TrendStatusBadge";
 import { TrendChart } from "./TrendSparkline";
 import { useWatchlist } from "../hooks/useWatchlist";
+import type { ConsumerProductResult } from "../lib/data/consumerResult";
+import { ConsumerResultPanel } from "./ConsumerResultPanel";
 
-interface ProductDetailProps {
+interface LegacyProductDetailProps {
   product: Product;
   onBack: () => void;
+  consumerResult?: never;
+  productId?: never;
+}
+
+interface SafeConsumerProductDetailProps {
+  consumerResult: ConsumerProductResult | unknown;
+  productId: string;
+  onBack: () => void;
+  product?: never;
+}
+
+export type ProductDetailProps = LegacyProductDetailProps | SafeConsumerProductDetailProps;
+
+export function ProductDetail(props: ProductDetailProps) {
+  if ("consumerResult" in props) {
+    return (
+      <div
+        className="flex flex-col h-full overflow-y-auto"
+        style={{ background: "var(--background)", scrollbarWidth: "none" }}
+      >
+        <div className="px-4 pt-4">
+          <button
+            onClick={props.onBack}
+            className="flex items-center gap-2 px-3 py-2 rounded-xl"
+            style={{ background: "var(--card)", border: "1px solid var(--border)" }}
+          >
+            <ArrowLeft size={15} style={{ color: "var(--foreground)" }} />
+            <span style={{ color: "var(--foreground)", fontSize: "0.75rem", fontWeight: 700 }}>Back</span>
+          </button>
+        </div>
+        <div className="p-4">
+          <ConsumerResultPanel consumerResult={props.consumerResult} productId={props.productId} />
+        </div>
+      </div>
+    );
+  }
+
+  return <LegacyProductDetail product={props.product} onBack={props.onBack} />;
 }
 
 function SentimentGauge({ score, label }: { score: number; label: string }) {
@@ -40,7 +80,7 @@ function formatChange(pct: number): string {
   return (pct > 0 ? "+" : "") + pct.toFixed(1) + "% this week";
 }
 
-export function ProductDetail({ product, onBack }: ProductDetailProps) {
+function LegacyProductDetail({ product, onBack }: LegacyProductDetailProps) {
   const { isWatched, toggle } = useWatchlist();
   const watched = isWatched(product.id);
   const changeColor = product.trend.changePercent >= 0 ? trendColor(product.trend.status) : "#A78BFA";
