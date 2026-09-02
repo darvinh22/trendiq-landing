@@ -70,9 +70,17 @@ export function buildProductTrendSnapshot(
   providers: readonly TrendSignalProvider[] = mockTrendSignalProviders,
   options: BuildProductTrendSnapshotOptions = {}
 ): ProductTrendSnapshot {
+  const rawSignals = collectProviderSignals(productId, providers);
+  return buildProductTrendSnapshotFromSignals(productId, rawSignals, options);
+}
+
+export function buildProductTrendSnapshotFromSignals(
+  productId: string,
+  rawSignals: readonly NormalizedTrendSignal[],
+  options: BuildProductTrendSnapshotOptions = {}
+): ProductTrendSnapshot {
   const timestamp = options.timestamp ?? DATA_LAYER_TIMESTAMP;
   const sourceMode = options.sourceMode ?? "mock";
-  const rawSignals = collectProviderSignals(productId, providers);
   const aggregation = aggregateSignals(productId, rawSignals, timestamp);
   const trendIQScore = calculateTrendIQScore(aggregation.aggregatedSignals);
   const confidence = calculateConfidenceScore(aggregation.confidenceSignals);
@@ -109,36 +117,6 @@ export async function buildProductTrendSnapshotAsync(
   providers: readonly TrendSignalProvider[] = mockTrendSignalProviders,
   options: BuildProductTrendSnapshotOptions = {}
 ): Promise<ProductTrendSnapshot> {
-  const timestamp = options.timestamp ?? DATA_LAYER_TIMESTAMP;
-  const sourceMode = options.sourceMode ?? "mock";
   const rawSignals = await collectProviderSignalsAsync(productId, providers);
-  const aggregation = aggregateSignals(productId, rawSignals, timestamp);
-  const trendIQScore = calculateTrendIQScore(aggregation.aggregatedSignals);
-  const confidence = calculateConfidenceScore(aggregation.confidenceSignals);
-  const trendStatus = calculateSnapshotTrendStatus(aggregation, options.historicalSnapshots);
-  const liveDataAudit = buildTrendIQSnapshotProvenanceSummary({
-    sourceMode,
-    rawSignals: aggregation.rawSignals,
-    trendIQScore,
-    confidence,
-    trendStatus,
-  });
-  const searchMomentumV1 = buildSearchMomentumV1({
-    aggregatedSignals: aggregation.aggregatedSignals,
-    rawSignals: aggregation.rawSignals,
-  });
-
-  return {
-    productId,
-    timestamp,
-    sourceMode,
-    rawSignals: aggregation.rawSignals,
-    aggregatedSignals: aggregation.aggregatedSignals,
-    trendIQScore,
-    confidence,
-    trendStatus,
-    provenance: aggregation.provenance,
-    liveDataAudit,
-    searchMomentumV1,
-  };
+  return buildProductTrendSnapshotFromSignals(productId, rawSignals, options);
 }

@@ -1,13 +1,8 @@
 import { calculateConfidenceScore } from "../lib/scoring/confidenceEngine";
 import { calculateTrendMomentum } from "../lib/scoring/momentumEngine";
 import { calculateTrendIQScore } from "../lib/scoring/scoreEngine";
-import {
-  buildMockHistoricalSnapshots,
-  buildProductTrendSnapshot,
-  mockTrendSignalProviders,
-  RAY_BAN_META_PRODUCT_ID,
-} from "../lib/data";
-import type { DataProvenanceSummary, ProductCommerce, ProductTrendSnapshot } from "../lib/data";
+import { buildMockHistoricalSnapshots, calculateHistoricalMomentum } from "../lib/data/history";
+import type { DataProvenanceSummary, ProductCommerce, ProductTrendSnapshot } from "../lib/data/types";
 import type {
   ConfidenceScoreResult,
   ScoreVersion,
@@ -816,37 +811,7 @@ const MOCK_SIGNAL_INPUTS: Record<string, TrendIQSignalInputs> = {
   },
 };
 
-function buildDataLayerProduct(seed: ProductSeed): Product {
-  const historicalSnapshots = buildMockHistoricalSnapshots(seed.id);
-  const snapshot = buildProductTrendSnapshot(seed.id, mockTrendSignalProviders, {
-    timestamp: seed.trend.lastUpdated,
-    historicalSnapshots,
-  });
-
-  return {
-    ...seed,
-    legacyScore: seed.score,
-    score: snapshot.trendIQScore.score,
-    scoreVersion: snapshot.trendIQScore.scoreVersion,
-    scoreBreakdown: snapshot.trendIQScore,
-    confidence: snapshot.confidence,
-    scoringSignals: snapshot.aggregatedSignals,
-    provenance: snapshot.provenance,
-    trendSnapshot: snapshot,
-    trend: {
-      ...seed.trend,
-      changePercent: snapshot.trendStatus.changePercent,
-      status: snapshot.trendStatus.status,
-      lastUpdated: snapshot.timestamp,
-    },
-  };
-}
-
 function buildProduct(seed: ProductSeed): Product {
-  if (seed.id === RAY_BAN_META_PRODUCT_ID) {
-    return buildDataLayerProduct(seed);
-  }
-
   const scoringSignals = MOCK_SIGNAL_INPUTS[seed.id];
 
   if (!scoringSignals) {
@@ -855,10 +820,12 @@ function buildProduct(seed: ProductSeed): Product {
 
   const scoreBreakdown = calculateTrendIQScore(scoringSignals);
   const confidence = calculateConfidenceScore(scoringSignals.confidence);
-  const momentum = calculateTrendMomentum({
-    changePercent: seed.trend.changePercent,
-    history: seed.trend.history,
-  });
+  const momentum = seed.id === "ray-ban-meta"
+    ? calculateHistoricalMomentum(buildMockHistoricalSnapshots(seed.id))
+    : calculateTrendMomentum({
+        changePercent: seed.trend.changePercent,
+        history: seed.trend.history,
+      });
 
   return {
     ...seed,

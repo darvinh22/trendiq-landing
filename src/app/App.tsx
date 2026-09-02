@@ -6,6 +6,8 @@ import { ProductCard } from "./components/ProductCard";
 import { ProductDetail } from "./components/ProductDetail";
 import { CompareScreen } from "./components/CompareScreen";
 import { ForYouScreen } from "./components/ForYouScreen";
+import { ProductAnalysisScreen } from "./components/ProductAnalysisScreen";
+import { isControlledAnalysisProductId } from "./lib/analysis/productAnalysisContract";
 
 {/* MARKER-MAKE-KIT-INVOKED */}
 
@@ -81,7 +83,11 @@ export default function App() {
               className="absolute inset-0"
               style={{ zIndex: 10 }}
             >
-              <ProductDetail product={selectedProduct} onBack={() => setSelectedProduct(null)} />
+              {isControlledAnalysisProductId(selectedProduct.id) ? (
+                <ProductAnalysisScreen product={selectedProduct} onBack={() => setSelectedProduct(null)} />
+              ) : (
+                <ProductDetail product={selectedProduct} onBack={() => setSelectedProduct(null)} />
+              )}
             </motion.div>
           ) : (
             <motion.div

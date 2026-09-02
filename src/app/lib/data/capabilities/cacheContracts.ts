@@ -45,7 +45,7 @@ export interface ProductResolutionCache {
 }
 
 export interface ProviderIdentityCache {
-  get(productId: string, provider: LiveProviderId): Promise<ProviderIdentityCacheEntry | undefined>;
+  get(cacheKey: string, provider: LiveProviderId): Promise<ProviderIdentityCacheEntry | undefined>;
   set(entry: ProviderIdentityCacheEntry): Promise<void>;
 }
 
@@ -153,8 +153,8 @@ export class InMemoryProductResolutionCache implements ProductResolutionCache {
 export class InMemoryProviderIdentityCache implements ProviderIdentityCache {
   private readonly entries = new Map<string, ProviderIdentityCacheEntry>();
 
-  async get(productId: string, provider: LiveProviderId): Promise<ProviderIdentityCacheEntry | undefined> {
-    return this.entries.get(`${provider}:${productId}`);
+  async get(cacheKey: string, provider: LiveProviderId): Promise<ProviderIdentityCacheEntry | undefined> {
+    return this.entries.get(`${provider}:${cacheKey}`);
   }
 
   async set(entry: ProviderIdentityCacheEntry): Promise<void> {

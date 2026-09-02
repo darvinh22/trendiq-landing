@@ -1,6 +1,3 @@
-import { calculateConfidenceScore } from "../scoring/confidenceEngine";
-import { calculateTrendMomentum } from "../scoring/momentumEngine";
-import { calculateTrendIQScore } from "../scoring/scoreEngine";
 import { createDataForSeoGoogleAdsSearchVolumeExecutionAdapter } from "./capabilities/dataForSeoGoogleAdsSearchVolumeAdapter";
 import { createDataForSeoTrendsExecutionAdapter } from "./capabilities/dataForSeoTrendsAdapter";
 import {
@@ -9,9 +6,7 @@ import {
   resolveProductQuery,
   buildSignalExecutionPlan,
 } from "./capabilities";
-import { buildTrendIQSnapshotProvenanceSummary } from "./liveDataAudit";
-import { buildSearchMomentumV1 } from "./searchMomentum";
-import { aggregateSignals } from "./signalAggregator";
+import { buildProductTrendSnapshotFromSignals } from "./snapshotEngine";
 import type {
   ProductResolutionResult,
   ProviderIdentityDiscoveryResult,
@@ -103,48 +98,6 @@ function matchingApproval(
   step: SignalExecutionStep
 ): SignalExecutionApproval | undefined {
   return approvals.find((approval) => approvalMatchesStep(approval, plan, step));
-}
-
-function buildSnapshot(input: {
-  productId: string;
-  timestamp: string;
-  rawSignals: NormalizedTrendSignal[];
-}): ProductTrendSnapshot {
-  const aggregation = aggregateSignals(input.productId, input.rawSignals, input.timestamp);
-  const trendIQScore = calculateTrendIQScore(aggregation.aggregatedSignals);
-  const confidence = calculateConfidenceScore(aggregation.confidenceSignals);
-  const trendStatus = calculateTrendMomentum({
-    changePercent: aggregation.aggregatedSignals.growthVelocity.trendChangePercent,
-    current7dRelativeInterest: aggregation.aggregatedSignals.searchMomentum.current7dRelativeInterest,
-    previous7dRelativeInterest: aggregation.aggregatedSignals.searchMomentum.previous7dRelativeInterest,
-    hasSearchGrowthContext: aggregation.aggregatedSignals.growthVelocity.hasSearchDerivedVelocity,
-    hasLowBaseSearchGrowth: aggregation.aggregatedSignals.searchMomentum.hasLowBaseSearchGrowth,
-  });
-  const liveDataAudit = buildTrendIQSnapshotProvenanceSummary({
-    sourceMode: "live",
-    rawSignals: aggregation.rawSignals,
-    trendIQScore,
-    confidence,
-    trendStatus,
-  });
-  const searchMomentumV1 = buildSearchMomentumV1({
-    aggregatedSignals: aggregation.aggregatedSignals,
-    rawSignals: aggregation.rawSignals,
-  });
-
-  return {
-    productId: input.productId,
-    timestamp: input.timestamp,
-    sourceMode: "live",
-    rawSignals: aggregation.rawSignals,
-    aggregatedSignals: aggregation.aggregatedSignals,
-    trendIQScore,
-    confidence,
-    trendStatus,
-    provenance: aggregation.provenance,
-    liveDataAudit,
-    searchMomentumV1,
-  };
 }
 
 export function createScopedSignalExecutionApproval(input: {
@@ -255,10 +208,9 @@ export async function runControlledLiveSearchToScore(
   const rawSignals = executionResults
     .filter((result) => result.status === "completed")
     .flatMap((result) => result.signals);
-  const snapshot = buildSnapshot({
-    productId: resolution.profile.productId,
+  const snapshot = buildProductTrendSnapshotFromSignals(resolution.profile.productId, rawSignals, {
     timestamp,
-    rawSignals,
+    sourceMode: "live",
   });
 
   return {
