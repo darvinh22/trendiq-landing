@@ -21,6 +21,40 @@ function testOrchestrator(collect = vi.fn(async () => ({
 }
 
 describe("product analysis API boundary", () => {
+  it("returns only the sole allowlisted product's public-safe catalog fields at zero provider cost", () => {
+    const { orchestrator, collect } = testOrchestrator();
+    const response = handleProductAnalysisApiRequest({
+      method: "GET",
+      pathname: "/api/product-analysis/catalog",
+    }, orchestrator);
+
+    expect(response).toEqual({
+      statusCode: 200,
+      body: {
+        version: "controlled_product_catalog_v1",
+        products: [{
+          productId: "ray-ban-meta",
+          displayName: "Ray-Ban Meta Glasses",
+          brand: "Ray-Ban",
+          category: "Tech",
+        }],
+      },
+    });
+    if (!("products" in response.body)) throw new Error("expected controlled catalog response");
+    expect(Object.keys(response.body.products[0]).sort()).toEqual([
+      "brand", "category", "displayName", "productId",
+    ]);
+    expect(collect).not.toHaveBeenCalled();
+
+    const serialized = JSON.stringify(response.body);
+    for (const forbidden of [
+      "providerIds", "taskId", "gid", "dataDocid", "aliases", "query", "guardrails",
+      "seller", "sourceDomain", "Authorization", "rawResponse", "rawReviewBody",
+    ]) {
+      expect(serialized).not.toContain(forbidden);
+    }
+  });
+
   it("accepts only the browser-owned productId field", () => {
     const { orchestrator } = testOrchestrator();
     expect(handleProductAnalysisApiRequest({

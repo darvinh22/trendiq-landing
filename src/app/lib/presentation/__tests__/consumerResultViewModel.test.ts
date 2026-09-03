@@ -304,6 +304,23 @@ describe("buildConsumerResultViewModel", () => {
     expect(result.trust.summary).toBe(source.trust.summary);
   });
 
+  it("formats public evaluation time and freshness age without exposing provider detail", () => {
+    const result = view(createConsumerProductResultFixture({
+      evaluatedAt: "2026-09-01T12:34:00.000Z",
+      freshnessStatus: "degraded",
+      freshnessAgeHours: 36.5,
+    }));
+
+    expect(result.trust).toMatchObject({
+      evaluatedAtLabel: "2026-09-01 12:34 UTC",
+      freshnessStatus: "degraded",
+      freshnessStatusLabel: "Evidence limited",
+      freshnessAgeHours: 36.5,
+      freshnessAgeLabel: "36.5 hours old",
+    });
+    expect(JSON.stringify(result.trust)).not.toMatch(/provider|taskId|sourceDomain/i);
+  });
+
   it("does not mutate the ConsumerProductResult input", () => {
     const result = createConsumerProductResultFixture();
     const before = structuredClone(result);

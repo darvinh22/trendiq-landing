@@ -1,12 +1,17 @@
 import {
+  parseControlledProductCatalogResponse,
   parseProductAnalysisResponse,
+  type ControlledProductCatalogResponse,
   type ProductAnalysisResponse,
 } from "./productAnalysisContract";
 
 export interface ProductAnalysisClient {
+  listCatalog(): Promise<ControlledProductCatalogResponse | null>;
   start(productId: string): Promise<ProductAnalysisResponse>;
   getStatus(analysisId: string): Promise<ProductAnalysisResponse>;
 }
+
+export type ProductAnalysisExecutionClient = Pick<ProductAnalysisClient, "start" | "getStatus">;
 
 async function readResponse(response: Response): Promise<ProductAnalysisResponse> {
   let body: unknown;
@@ -20,6 +25,18 @@ async function readResponse(response: Response): Promise<ProductAnalysisResponse
 }
 
 export const productAnalysisClient: ProductAnalysisClient = {
+  async listCatalog() {
+    try {
+      const response = await fetch("/api/product-analysis/catalog", {
+        method: "GET",
+        headers: { Accept: "application/json" },
+      });
+      return parseControlledProductCatalogResponse(await response.json());
+    } catch {
+      return null;
+    }
+  },
+
   async start(productId) {
     try {
       return readResponse(await fetch("/api/product-analysis", {

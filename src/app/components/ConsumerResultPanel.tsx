@@ -46,12 +46,14 @@ function MetricCard({
   status,
   statusLabel,
   explanation,
+  context,
 }: {
   label: string;
   value: string;
   status: ConsumerEvidenceStatus;
   statusLabel: string;
   explanation: string;
+  context?: string;
 }) {
   return (
     <section
@@ -69,6 +71,11 @@ function MetricCard({
       <p style={{ color: "var(--muted-foreground)", fontSize: "0.68rem", lineHeight: 1.45, marginTop: 4 }}>
         {explanation}
       </p>
+      {context && (
+        <p style={{ color: "var(--foreground)", fontSize: "0.66rem", lineHeight: 1.45, marginTop: 5 }}>
+          {context}
+        </p>
+      )}
     </section>
   );
 }
@@ -76,6 +83,11 @@ function MetricCard({
 export function ConsumerResultPanel({ consumerResult, productId }: ConsumerResultPanelProps) {
   const view = buildConsumerResultViewModel({ consumerResult, productId });
   const decisionColor = recommendationColor(view.decision.recommendation);
+  const scoreCoverageContext =
+    view.score.liveCoveragePercent !== null &&
+    (view.score.status === "degraded" || view.score.liveCoveragePercent < 100)
+      ? `Live evidence coverage: ${view.score.liveCoveragePercent}%`
+      : undefined;
 
   return (
     <article className="flex flex-col gap-4" data-consumer-result-version={view.version}>
@@ -125,6 +137,7 @@ export function ConsumerResultPanel({ consumerResult, productId }: ConsumerResul
           status={view.score.status}
           statusLabel={view.score.statusLabel}
           explanation={view.score.explanation}
+          context={scoreCoverageContext}
         />
         <MetricCard
           label="Evidence Confidence"
@@ -132,6 +145,7 @@ export function ConsumerResultPanel({ consumerResult, productId }: ConsumerResul
           status={view.confidence.status}
           statusLabel={view.confidence.statusLabel}
           explanation={view.confidence.explanation}
+          context="Confidence measures evidence quality. It is not the probability that the recommendation is correct."
         />
         <MetricCard
           label="Search Momentum"
@@ -221,6 +235,25 @@ export function ConsumerResultPanel({ consumerResult, productId }: ConsumerResul
         </section>
       )}
 
+      {view.take.missingEvidence.length > 0 && (
+        <section
+          className="rounded-2xl p-4"
+          style={{ background: "rgba(255,181,71,0.05)", border: "1px solid rgba(255,181,71,0.2)" }}
+          aria-label="Missing evidence"
+        >
+          <h2 style={{ color: "#FFB547", fontSize: "0.78rem", fontWeight: 800, marginBottom: 7 }}>
+            MISSING EVIDENCE
+          </h2>
+          <ul className="space-y-1.5">
+            {view.take.missingEvidence.map((item) => (
+              <li key={item.key} style={{ color: "var(--foreground)", fontSize: "0.74rem", lineHeight: 1.5 }}>
+                {item.label} unavailable
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       <section
         className="rounded-2xl p-4"
         style={{ background: "var(--card)", border: "1px solid var(--border)" }}
@@ -254,6 +287,20 @@ export function ConsumerResultPanel({ consumerResult, productId }: ConsumerResul
         <p style={{ color: "var(--muted-foreground)", fontSize: "0.68rem", lineHeight: 1.45, marginTop: 7 }}>
           {view.trust.summary}
         </p>
+        <dl className="grid grid-cols-1 gap-1 mt-3">
+          <div className="flex items-center justify-between gap-3">
+            <dt style={{ color: "var(--muted-foreground)", fontSize: "0.66rem" }}>Evaluated</dt>
+            <dd style={{ color: "var(--foreground)", fontSize: "0.66rem", fontWeight: 700 }}>
+              {view.trust.evaluatedAtLabel}
+            </dd>
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <dt style={{ color: "var(--muted-foreground)", fontSize: "0.66rem" }}>Evidence freshness</dt>
+            <dd style={{ color: "var(--foreground)", fontSize: "0.66rem", fontWeight: 700 }}>
+              {view.trust.freshnessStatusLabel} · {view.trust.freshnessAgeLabel}
+            </dd>
+          </div>
+        </dl>
       </footer>
     </article>
   );

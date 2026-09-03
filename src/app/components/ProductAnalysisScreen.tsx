@@ -1,21 +1,25 @@
 import { useCallback, useEffect, useReducer } from "react";
 import { ArrowLeft, LoaderCircle, RefreshCw, ShieldCheck, Sparkles } from "lucide-react";
-import type { Product } from "./data";
-import { ProductDetail } from "./ProductDetail";
+import { ConsumerResultPanel } from "./ConsumerResultPanel";
 import {
   productAnalysisClient,
-  type ProductAnalysisClient,
+  type ProductAnalysisExecutionClient,
 } from "../lib/analysis/productAnalysisClient";
 import type {
+  ControlledProductCatalogItem,
   ProductAnalysisResponse,
   ProductAnalysisSafeReason,
 } from "../lib/analysis/productAnalysisContract";
 import type { ConsumerProductResult } from "../lib/data/consumerResult";
 
+export const PRODUCT_ANALYSIS_POLL_INTERVAL_MS = 750;
+export const PRODUCT_ANALYSIS_MAX_POLL_ATTEMPTS = 80;
+
 export type ProductAnalysisUiState =
   | { phase: "idle" }
   | { phase: "analyzing" }
   | { phase: "pending"; analysisId: string }
+  | { phase: "polling_timeout" }
   | { phase: "completed"; result: ConsumerProductResult }
   | { phase: "unavailable"; reason: ProductAnalysisSafeReason }
   | { phase: "error"; reason: ProductAnalysisSafeReason };
@@ -23,6 +27,7 @@ export type ProductAnalysisUiState =
 export type ProductAnalysisUiAction =
   | { type: "analyze" }
   | { type: "response"; response: ProductAnalysisResponse }
+  | { type: "pollingDeadline" }
   | { type: "retry" };
 
 export function productAnalysisUiReducer(
@@ -31,6 +36,7 @@ export function productAnalysisUiReducer(
 ): ProductAnalysisUiState {
   if (action.type === "analyze") return { phase: "analyzing" };
   if (action.type === "retry") return { phase: "idle" };
+  if (action.type === "pollingDeadline") return { phase: "polling_timeout" };
 
   const response = action.response;
   if (response.status === "pending") return { phase: "pending", analysisId: response.analysisId };
@@ -39,8 +45,62 @@ export function productAnalysisUiReducer(
   return { phase: "error", reason: response.reason };
 }
 
+export type ProductAnalysisPollingOutcome =
+  | { status: "settled"; response: Exclude<ProductAnalysisResponse, { status: "pending" }> }
+  | { status: "deadline" }
+  | { status: "cancelled" };
+
+interface ProductAnalysisPollingOptions {
+  maxAttempts?: number;
+  intervalMs?: number;
+  wait?: (delayMs: number) => Promise<void>;
+  shouldStop?: () => boolean;
+}
+
+function waitFor(delayMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
+export async function pollProductAnalysisUntilSettled(
+  client: ProductAnalysisExecutionClient,
+  analysisId: string,
+  options: ProductAnalysisPollingOptions = {}
+): Promise<ProductAnalysisPollingOutcome> {
+  const maxAttempts = options.maxAttempts ?? PRODUCT_ANALYSIS_MAX_POLL_ATTEMPTS;
+  const intervalMs = options.intervalMs ?? PRODUCT_ANALYSIS_POLL_INTERVAL_MS;
+  const wait = options.wait ?? waitFor;
+  const shouldStop = options.shouldStop ?? (() => false);
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    await wait(intervalMs);
+    if (shouldStop()) return { status: "cancelled" };
+
+    let response: ProductAnalysisResponse;
+    try {
+      response = await client.getStatus(analysisId);
+    } catch {
+      response = { status: "error", reason: "analysis_failed" };
+    }
+    if (shouldStop()) return { status: "cancelled" };
+    if (response.status !== "pending") return { status: "settled", response };
+  }
+
+  return { status: "deadline" };
+}
+
+export async function requestProductAnalysis(
+  client: ProductAnalysisExecutionClient,
+  productId: string
+): Promise<ProductAnalysisResponse> {
+  try {
+    return await client.start(productId);
+  } catch {
+    return { status: "error", reason: "analysis_failed" };
+  }
+}
+
 interface ProductAnalysisViewProps {
-  product: Pick<Product, "id" | "title" | "subtitle" | "emoji">;
+  product: ControlledProductCatalogItem;
   state: Exclude<ProductAnalysisUiState, { phase: "completed" }>;
   onAnalyze: () => void;
   onRetry: () => void;
@@ -55,7 +115,7 @@ function safeReasonText(reason: ProductAnalysisSafeReason): string {
 
 export function ProductAnalysisView({ product, state, onAnalyze, onRetry, onBack }: ProductAnalysisViewProps) {
   const isWorking = state.phase === "analyzing" || state.phase === "pending";
-  const canRetry = state.phase === "unavailable" || state.phase === "error";
+  const canRetry = state.phase === "unavailable" || state.phase === "error" || state.phase === "polling_timeout";
 
   return (
     <div className="flex flex-col h-full" style={{ background: "var(--background)" }}>
@@ -71,19 +131,13 @@ export function ProductAnalysisView({ product, state, onAnalyze, onRetry, onBack
       </div>
 
       <div className="flex-1 flex flex-col justify-center px-6 pb-12 gap-5">
-        <div
-          className="rounded-3xl p-5"
-          style={{ background: "var(--card)", border: "1px solid var(--border)" }}
-        >
-          <div className="flex items-center gap-3 mb-3">
-            <span style={{ fontSize: "2rem" }}>{product.emoji}</span>
-            <div>
-              <h1 style={{ color: "var(--foreground)", fontSize: "1rem", fontWeight: 800 }}>{product.title}</h1>
-              <p style={{ color: "var(--muted-foreground)", fontSize: "0.75rem" }}>{product.subtitle}</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <ShieldCheck size={14} style={{ color: "#18D3D1" }} />
+        <div className="rounded-3xl p-5" style={{ background: "var(--card)", border: "1px solid var(--border)" }}>
+          <h1 style={{ color: "var(--foreground)", fontSize: "1rem", fontWeight: 800 }}>{product.displayName}</h1>
+          <p style={{ color: "var(--muted-foreground)", fontSize: "0.75rem", marginTop: 3 }}>
+            {product.brand} · {product.category}
+          </p>
+          <div className="flex items-center gap-2 mt-4">
+            <ShieldCheck size={14} style={{ color: "#18D3D1", flexShrink: 0 }} />
             <p style={{ color: "var(--muted-foreground)", fontSize: "0.7rem", lineHeight: 1.5 }}>
               TrendIQ will use only controlled, server-validated evidence for this result.
             </p>
@@ -107,7 +161,7 @@ export function ProductAnalysisView({ product, state, onAnalyze, onRetry, onBack
               {state.phase === "analyzing" ? "Analyzing controlled evidence…" : "Analysis pending…"}
             </p>
             <p style={{ color: "var(--muted-foreground)", fontSize: "0.7rem", textAlign: "center" }}>
-              Review evidence may require a short bounded provider poll.
+              The application checks for a result within a bounded polling window.
             </p>
           </div>
         )}
@@ -115,7 +169,11 @@ export function ProductAnalysisView({ product, state, onAnalyze, onRetry, onBack
         {canRetry && (
           <div className="flex flex-col items-center gap-3 py-4" aria-live="polite">
             <p style={{ color: state.phase === "error" ? "#FF8C8C" : "#FFB547", fontSize: "0.8rem", textAlign: "center" }}>
-              {state.phase === "unavailable" ? safeReasonText(state.reason) : "A safe application error occurred."}
+              {state.phase === "unavailable"
+                ? safeReasonText(state.reason)
+                : state.phase === "polling_timeout"
+                  ? "The application polling window ended before a result was ready. No new analysis was started."
+                  : "A safe application error occurred."}
             </p>
             <button
               onClick={onRetry}
@@ -131,10 +189,38 @@ export function ProductAnalysisView({ product, state, onAnalyze, onRetry, onBack
   );
 }
 
-export interface ProductAnalysisScreenProps {
-  product: Product;
+function ControlledProductResultView({
+  result,
+  productId,
+  onBack,
+}: {
+  result: ConsumerProductResult;
+  productId: string;
   onBack: () => void;
-  client?: ProductAnalysisClient;
+}) {
+  return (
+    <div className="flex flex-col h-full" style={{ background: "var(--background)" }}>
+      <div className="px-4 pt-4 pb-3 shrink-0">
+        <button
+          onClick={onBack}
+          className="flex items-center gap-2 px-3 py-2 rounded-xl"
+          style={{ background: "var(--card)", border: "1px solid var(--border)" }}
+        >
+          <ArrowLeft size={15} style={{ color: "var(--foreground)" }} />
+          <span style={{ color: "var(--foreground)", fontSize: "0.75rem", fontWeight: 700 }}>Back</span>
+        </button>
+      </div>
+      <div className="flex-1 overflow-y-auto px-4 pb-6" style={{ scrollbarWidth: "none" }}>
+        <ConsumerResultPanel consumerResult={result} productId={productId} />
+      </div>
+    </div>
+  );
+}
+
+export interface ProductAnalysisScreenProps {
+  product: ControlledProductCatalogItem;
+  onBack: () => void;
+  client?: ProductAnalysisExecutionClient;
   initialState?: ProductAnalysisUiState;
 }
 
@@ -148,33 +234,31 @@ export function ProductAnalysisScreen({
 
   const analyze = useCallback(async () => {
     dispatch({ type: "analyze" });
-    dispatch({ type: "response", response: await client.start(product.id) });
-  }, [client, product.id]);
+    dispatch({ type: "response", response: await requestProductAnalysis(client, product.productId) });
+  }, [client, product.productId]);
 
   useEffect(() => {
     if (state.phase !== "pending") return;
     let cancelled = false;
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
-    const poll = async () => {
-      const response = await client.getStatus(state.analysisId);
-      if (cancelled) return;
-      if (response.status === "pending") {
-        timeoutId = setTimeout(poll, 750);
+    pollProductAnalysisUntilSettled(client, state.analysisId, {
+      shouldStop: () => cancelled,
+    }).then((outcome) => {
+      if (cancelled || outcome.status === "cancelled") return;
+      if (outcome.status === "deadline") {
+        dispatch({ type: "pollingDeadline" });
       } else {
-        dispatch({ type: "response", response });
+        dispatch({ type: "response", response: outcome.response });
       }
-    };
-    timeoutId = setTimeout(poll, 750);
+    });
 
     return () => {
       cancelled = true;
-      if (timeoutId) clearTimeout(timeoutId);
     };
   }, [client, state]);
 
   if (state.phase === "completed") {
-    return <ProductDetail consumerResult={state.result} productId={product.id} onBack={onBack} />;
+    return <ControlledProductResultView result={state.result} productId={product.productId} onBack={onBack} />;
   }
 
   return (

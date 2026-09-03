@@ -1,4 +1,8 @@
-import type { ProductAnalysisResponse } from "../../app/lib/analysis/productAnalysisContract";
+import type {
+  ControlledProductCatalogResponse,
+  ProductAnalysisResponse,
+} from "../../app/lib/analysis/productAnalysisContract";
+import { getControlledProductCatalog } from "./controlledProductCatalog";
 import { ProductAnalysisOrchestrator } from "./productAnalysisOrchestrator";
 
 export interface ProductAnalysisApiRequest {
@@ -9,7 +13,7 @@ export interface ProductAnalysisApiRequest {
 
 export interface ProductAnalysisApiResult {
   statusCode: number;
-  body: ProductAnalysisResponse;
+  body: ProductAnalysisResponse | ControlledProductCatalogResponse;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -37,6 +41,10 @@ export function handleProductAnalysisApiRequest(
   request: ProductAnalysisApiRequest,
   orchestrator: ProductAnalysisOrchestrator
 ): ProductAnalysisApiResult {
+  if (request.method === "GET" && request.pathname === "/api/product-analysis/catalog") {
+    return { statusCode: 200, body: getControlledProductCatalog() };
+  }
+
   if (request.method === "POST" && request.pathname === "/api/product-analysis") {
     if (!validStartBody(request.body)) {
       return { statusCode: 400, body: { status: "error", reason: "invalid_request" } };

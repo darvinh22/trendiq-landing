@@ -101,8 +101,11 @@ export interface ConsumerResultViewModel {
     statusLabel: string;
     summary: string;
     verifiedCoveragePercent: number | null;
+    evaluatedAtLabel: string;
     freshnessStatus: ConsumerEvidenceStatus;
     freshnessStatusLabel: string;
+    freshnessAgeHours: number | null;
+    freshnessAgeLabel: string;
     mockFallbackEvidenceExcluded: boolean;
     unavailableDimensionCount: number;
   };
@@ -175,6 +178,15 @@ function validProduct(value: unknown): boolean {
     nullableString(value.name) &&
     nullableString(value.brand) &&
     nullableString(value.category)
+  );
+}
+
+function validSource(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    nullableString(value.recommendationResultVersion) &&
+    nullableString(value.recommendationPolicyVersion) &&
+    nullableString(value.evaluatedAt)
   );
 }
 
@@ -319,6 +331,7 @@ function isConsumerProductResult(value: unknown): value is ConsumerProductResult
   return (
     isRecord(value) &&
     value.version === "consumer_product_result_v1" &&
+    validSource(value.source) &&
     validProduct(value.product) &&
     validDecision(value.decision) &&
     validScore(value.score) &&
@@ -349,6 +362,19 @@ function ratingLabel(value: number | null): string {
 
 function countLabel(value: number | null): string {
   return value === null ? "Unavailable" : `${value.toLocaleString("en-US")} reviews`;
+}
+
+function timestampLabel(value: string | null): string {
+  if (value === null) return "Unavailable";
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "Unavailable";
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")} ${String(date.getUTCHours()).padStart(2, "0")}:${String(date.getUTCMinutes()).padStart(2, "0")} UTC`;
+}
+
+function freshnessAgeLabel(value: number | null): string {
+  if (value === null) return "Unavailable";
+  const rounded = Math.round(value * 10) / 10;
+  return `${rounded} ${rounded === 1 ? "hour" : "hours"} old`;
 }
 
 function missingEvidenceLabel(value: RecommendationMissingEvidence): string {
@@ -455,8 +481,11 @@ function unavailableViewModel(productId: string, issue: ConsumerUiIssueCode): Co
       statusLabel: statusLabel("unavailable"),
       summary: "TrendIQ does not yet have enough trustworthy evidence for this result.",
       verifiedCoveragePercent: null,
+      evaluatedAtLabel: "Unavailable",
       freshnessStatus: "unavailable",
       freshnessStatusLabel: statusLabel("unavailable"),
+      freshnessAgeHours: null,
+      freshnessAgeLabel: "Unavailable",
       mockFallbackEvidenceExcluded: false,
       unavailableDimensionCount: 0,
     },
@@ -584,8 +613,11 @@ export function buildConsumerResultViewModel(input: BuildConsumerResultViewModel
       statusLabel: statusLabel(result.trust.status),
       summary: result.trust.summary,
       verifiedCoveragePercent: result.trust.verifiedCoveragePercent,
+      evaluatedAtLabel: timestampLabel(result.source.evaluatedAt),
       freshnessStatus: result.trust.freshness.status,
       freshnessStatusLabel: statusLabel(result.trust.freshness.status),
+      freshnessAgeHours: result.trust.freshness.ageHours,
+      freshnessAgeLabel: freshnessAgeLabel(result.trust.freshness.ageHours),
       mockFallbackEvidenceExcluded: result.trust.mockFallbackEvidenceExcluded,
       unavailableDimensionCount: result.trust.unavailableDimensions.length,
     },

@@ -16,6 +16,11 @@ export interface ConsumerProductResultFixtureOptions {
   reviewCount?: number | null;
   textEvidenceStatus?: ConsumerEvidenceStatus;
   watchOuts?: string[];
+  liveCoveragePercent?: number | null;
+  missingEvidence?: ConsumerProductResult["explanation"]["missingEvidence"];
+  evaluatedAt?: string | null;
+  freshnessStatus?: ConsumerEvidenceStatus;
+  freshnessAgeHours?: number | null;
 }
 
 function takeFor(recommendation: Recommendation): { headline: string; summary: string } {
@@ -79,7 +84,7 @@ export function createConsumerProductResultFixture(
     source: {
       recommendationResultVersion: "recommendation_result_v1",
       recommendationPolicyVersion: "recommendation_policy_v1",
-      evaluatedAt: "2026-09-01T12:00:00.000Z",
+      evaluatedAt: options.evaluatedAt === undefined ? "2026-09-01T12:00:00.000Z" : options.evaluatedAt,
     },
     product: {
       id: options.productId ?? "fixture-product-a",
@@ -97,7 +102,10 @@ export function createConsumerProductResultFixture(
     score: {
       value: score,
       status: scoreStatus,
-      liveCoveragePercent: scoreStatus === "unavailable" ? null : 100,
+      liveCoveragePercent:
+        options.liveCoveragePercent === undefined
+          ? scoreStatus === "unavailable" ? null : 100
+          : options.liveCoveragePercent,
       usedForDecision: scoreStatus !== "unavailable",
       explanation:
         scoreStatus === "verified"
@@ -164,7 +172,8 @@ export function createConsumerProductResultFixture(
         },
       ],
       watchOuts,
-      missingEvidence: options.textEvidenceStatus === "verified" ? [] : ["reviewText"],
+      missingEvidence:
+        options.missingEvidence ?? (options.textEvidenceStatus === "verified" ? [] : ["reviewText"]),
       bestFor: { status: "unavailable", items: [] },
     },
     trust: {
@@ -198,9 +207,12 @@ export function createConsumerProductResultFixture(
       ],
       missingCriticalEvidence: options.textEvidenceStatus === "verified" ? [] : ["reviewText"],
       freshness: {
-        status: status === "unavailable" ? "unavailable" : "verified",
+        status: options.freshnessStatus ?? (status === "unavailable" ? "unavailable" : "verified"),
         freshestSignalAt: status === "unavailable" ? null : "2026-08-31T12:00:00.000Z",
-        ageHours: status === "unavailable" ? null : 24,
+        ageHours:
+          options.freshnessAgeHours === undefined
+            ? status === "unavailable" ? null : 24
+            : options.freshnessAgeHours,
       },
       mockFallbackEvidenceExcluded: false,
       redactions: {

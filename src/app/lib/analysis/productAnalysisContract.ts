@@ -1,6 +1,16 @@
 import type { ConsumerProductResult } from "../data/consumerResult";
 
-export const CONTROLLED_ANALYSIS_PRODUCT_IDS = ["ray-ban-meta"] as const;
+export interface ControlledProductCatalogItem {
+  productId: string;
+  displayName: string;
+  brand: string;
+  category: string;
+}
+
+export interface ControlledProductCatalogResponse {
+  version: "controlled_product_catalog_v1";
+  products: ControlledProductCatalogItem[];
+}
 
 export type ProductAnalysisSafeReason =
   | "analysis_failed"
@@ -20,10 +30,6 @@ export interface ProductAnalysisStartRequest {
   productId: string;
 }
 
-export function isControlledAnalysisProductId(productId: string): boolean {
-  return (CONTROLLED_ANALYSIS_PRODUCT_IDS as readonly string[]).includes(productId);
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -36,6 +42,51 @@ const SAFE_REASONS = new Set<ProductAnalysisSafeReason>([
   "product_binding_mismatch",
   "product_not_supported",
 ]);
+
+const CATALOG_RESPONSE_KEYS = ["products", "version"];
+const CATALOG_ITEM_KEYS = ["brand", "category", "displayName", "productId"];
+
+function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  const actual = Object.keys(value).sort();
+  return actual.length === keys.length && actual.every((key, index) => key === keys[index]);
+}
+
+export function parseControlledProductCatalogResponse(value: unknown): ControlledProductCatalogResponse | null {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, CATALOG_RESPONSE_KEYS) ||
+    value.version !== "controlled_product_catalog_v1" ||
+    !Array.isArray(value.products)
+  ) {
+    return null;
+  }
+
+  const products: ControlledProductCatalogItem[] = [];
+  for (const product of value.products) {
+    if (
+      !isRecord(product) ||
+      !hasExactKeys(product, CATALOG_ITEM_KEYS) ||
+      typeof product.productId !== "string" ||
+      !/^[a-z0-9][a-z0-9-]{0,63}$/.test(product.productId) ||
+      typeof product.displayName !== "string" ||
+      !product.displayName.trim() ||
+      typeof product.brand !== "string" ||
+      !product.brand.trim() ||
+      typeof product.category !== "string" ||
+      !product.category.trim()
+    ) {
+      return null;
+    }
+    products.push({
+      productId: product.productId,
+      displayName: product.displayName,
+      brand: product.brand,
+      category: product.category,
+    });
+  }
+
+  return { version: "controlled_product_catalog_v1", products };
+}
 
 export function parseProductAnalysisResponse(value: unknown): ProductAnalysisResponse | null {
   if (!isRecord(value) || typeof value.status !== "string") return null;

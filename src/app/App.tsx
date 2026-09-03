@@ -1,67 +1,159 @@
-import { useState, useMemo } from "react";
-import { Search, Sparkles, Bell, TrendingUp, Cpu, Home, Dumbbell, Shirt, Plane, Flame, BarChart3 } from "lucide-react";
-import { motion, AnimatePresence } from "motion/react";
-import { PRODUCTS, CATEGORIES, type Product, type Category } from "./components/data";
-import { ProductCard } from "./components/ProductCard";
-import { ProductDetail } from "./components/ProductDetail";
-import { CompareScreen } from "./components/CompareScreen";
-import { ForYouScreen } from "./components/ForYouScreen";
+import { useEffect, useMemo, useState } from "react";
+import { ArrowRight, Search, ShieldCheck, Sparkles } from "lucide-react";
 import { ProductAnalysisScreen } from "./components/ProductAnalysisScreen";
-import { isControlledAnalysisProductId } from "./lib/analysis/productAnalysisContract";
+import {
+  productAnalysisClient,
+  type ProductAnalysisClient,
+} from "./lib/analysis/productAnalysisClient";
+import type { ControlledProductCatalogItem } from "./lib/analysis/productAnalysisContract";
 
-{/* MARKER-MAKE-KIT-INVOKED */}
+type CatalogState =
+  | { phase: "loading" }
+  | { phase: "ready"; products: ControlledProductCatalogItem[] }
+  | { phase: "error" };
 
-const CATEGORY_ICONS: Record<string, React.ReactNode> = {
-  All: <Sparkles size={13} />,
-  Tech: <Cpu size={13} />,
-  Gadgets: <BarChart3 size={13} />,
-  "AI Products": <Sparkles size={13} />,
-  Home: <Home size={13} />,
-  Fitness: <Dumbbell size={13} />,
-  Fashion: <Shirt size={13} />,
-  Travel: <Plane size={13} />,
-  "Viral TikTok": <Flame size={13} />,
-  "Consumer Trends": <TrendingUp size={13} />,
-};
+export function filterControlledCatalog(
+  products: readonly ControlledProductCatalogItem[],
+  query: string
+): ControlledProductCatalogItem[] {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) return [...products];
 
-type Tab = "trending" | "discover" | "compare" | "foryou";
+  return products.filter((product) =>
+    [product.productId, product.displayName, product.brand, product.category]
+      .some((value) => value.toLowerCase().includes(normalizedQuery))
+  );
+}
 
-const NAV_ITEMS: { id: Tab; icon: React.ReactNode; label: string }[] = [
-  { id: "trending", icon: <Flame size={18} />, label: "Trending" },
-  { id: "discover", icon: <Search size={18} />, label: "Discover" },
-  { id: "compare", icon: <BarChart3 size={18} />, label: "Compare" },
-  { id: "foryou", icon: <Sparkles size={18} />, label: "For You" },
-];
+export async function loadControlledCatalog(client: ProductAnalysisClient) {
+  return client.listCatalog();
+}
 
-export default function App() {
-  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+interface ControlledCatalogViewProps {
+  products: readonly ControlledProductCatalogItem[];
+  searchQuery: string;
+  onSearchChange: (query: string) => void;
+  onSelect: (product: ControlledProductCatalogItem) => void;
+}
+
+export function ControlledCatalogView({
+  products,
+  searchQuery,
+  onSearchChange,
+  onSelect,
+}: ControlledCatalogViewProps) {
+  const filteredProducts = useMemo(
+    () => filterControlledCatalog(products, searchQuery),
+    [products, searchQuery]
+  );
+
+  return (
+    <div className="flex flex-col h-full min-h-0">
+      <header className="px-6 pt-6 pb-4" style={{ borderBottom: "1px solid var(--border)" }}>
+        <div className="flex items-center gap-2">
+          <span style={{ color: "#18D3D1", fontWeight: 800, fontSize: "1.5rem", letterSpacing: "-0.03em" }}>
+            TrendIQ
+          </span>
+          <span
+            className="px-2 py-1 rounded-md"
+            style={{ background: "rgba(24,211,209,0.12)", color: "#18D3D1", fontSize: "0.58rem", fontWeight: 800 }}
+          >
+            CONTROLLED ALPHA
+          </span>
+        </div>
+        <p style={{ color: "var(--muted-foreground)", fontSize: "0.75rem", lineHeight: 1.5, marginTop: 5 }}>
+          Analyze products that have an approved, server-controlled evidence path.
+        </p>
+      </header>
+
+      <main className="flex-1 overflow-y-auto px-4 py-4" style={{ scrollbarWidth: "none" }}>
+        <div
+          className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-2xl mb-4"
+          style={{ background: "var(--secondary)", border: "1px solid var(--border)" }}
+        >
+          <Search size={15} style={{ color: "var(--muted-foreground)", flexShrink: 0 }} />
+          <input
+            type="search"
+            aria-label="Filter controlled products"
+            placeholder="Filter controlled products"
+            value={searchQuery}
+            onChange={(event) => onSearchChange(event.target.value)}
+            className="flex-1 bg-transparent outline-none"
+            style={{ color: "var(--foreground)", fontSize: "0.82rem", border: "none" }}
+          />
+        </div>
+
+        <div className="flex items-center gap-2 mb-3">
+          <ShieldCheck size={14} style={{ color: "#18D3D1" }} />
+          <p style={{ color: "var(--muted-foreground)", fontSize: "0.7rem", lineHeight: 1.45 }}>
+            Browsing and filtering do not run an analysis. Provider work starts only after you choose Analyze.
+          </p>
+        </div>
+
+        {filteredProducts.length === 0 ? (
+          <div className="rounded-2xl p-5 text-center" style={{ background: "var(--card)", border: "1px solid var(--border)" }}>
+            <p style={{ color: "var(--foreground)", fontSize: "0.8rem", fontWeight: 700 }}>No controlled products match.</p>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-3">
+            {filteredProducts.map((product) => (
+              <button
+                key={product.productId}
+                onClick={() => onSelect(product)}
+                className="w-full rounded-2xl p-4 text-left"
+                style={{ background: "var(--card)", border: "1px solid var(--border)" }}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h2 style={{ color: "var(--foreground)", fontSize: "0.95rem", fontWeight: 800 }}>
+                      {product.displayName}
+                    </h2>
+                    <p style={{ color: "var(--muted-foreground)", fontSize: "0.72rem", marginTop: 3 }}>
+                      {product.brand} · {product.category}
+                    </p>
+                  </div>
+                  <ArrowRight size={17} style={{ color: "#18D3D1", flexShrink: 0, marginTop: 2 }} />
+                </div>
+                <div className="flex items-center gap-1.5 mt-4">
+                  <Sparkles size={13} style={{ color: "#18D3D1" }} />
+                  <span style={{ color: "#18D3D1", fontSize: "0.7rem", fontWeight: 700 }}>
+                    Open controlled analysis
+                  </span>
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
+
+export interface AppProps {
+  client?: ProductAnalysisClient;
+}
+
+export default function App({ client = productAnalysisClient }: AppProps) {
+  const [catalogState, setCatalogState] = useState<CatalogState>({ phase: "loading" });
+  const [selectedProduct, setSelectedProduct] = useState<ControlledProductCatalogItem | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [activeCategory, setActiveCategory] = useState<Category | "All">("All");
-  const [activeTab, setActiveTab] = useState<Tab>("trending");
 
-  const filteredProducts = useMemo(() => {
-    return PRODUCTS.filter((p) => {
-      const matchesCategory = activeCategory === "All" || p.category === activeCategory;
-      const matchesSearch =
-        !searchQuery ||
-        p.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        p.subtitle.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        p.trendiqSays.toLowerCase().includes(searchQuery.toLowerCase());
-      return matchesCategory && matchesSearch;
+  useEffect(() => {
+    let cancelled = false;
+    loadControlledCatalog(client).then((catalog) => {
+      if (cancelled) return;
+      setCatalogState(catalog ? { phase: "ready", products: catalog.products } : { phase: "error" });
     });
-  }, [searchQuery, activeCategory]);
-
-  const handleTabChange = (tab: Tab) => {
-    setActiveTab(tab);
-    setSelectedProduct(null);
-  };
+    return () => {
+      cancelled = true;
+    };
+  }, [client]);
 
   return (
     <div
       className="size-full flex items-center justify-center"
       style={{ background: "#04050A", fontFamily: "'Inter', sans-serif" }}
     >
-      {/* Phone frame */}
       <div
         className="relative flex flex-col overflow-hidden"
         style={{
@@ -69,223 +161,35 @@ export default function App() {
           height: "min(844px, 100%)",
           background: "var(--background)",
           borderRadius: "clamp(0px, 4vw, 44px)",
-          boxShadow: "0 0 0 1px rgba(255,255,255,0.06), 0 40px 80px rgba(0,0,0,0.8), 0 0 120px rgba(24,211,209,0.04)",
+          boxShadow: "0 0 0 1px rgba(255,255,255,0.06), 0 40px 80px rgba(0,0,0,0.8)",
         }}
       >
-        <AnimatePresence mode="wait">
-          {selectedProduct ? (
-            <motion.div
-              key="detail"
-              initial={{ x: "100%", opacity: 0 }}
-              animate={{ x: 0, opacity: 1 }}
-              exit={{ x: "100%", opacity: 0 }}
-              transition={{ type: "spring", damping: 28, stiffness: 280 }}
-              className="absolute inset-0"
-              style={{ zIndex: 10 }}
-            >
-              {isControlledAnalysisProductId(selectedProduct.id) ? (
-                <ProductAnalysisScreen product={selectedProduct} onBack={() => setSelectedProduct(null)} />
-              ) : (
-                <ProductDetail product={selectedProduct} onBack={() => setSelectedProduct(null)} />
-              )}
-            </motion.div>
-          ) : (
-            <motion.div
-              key={activeTab}
-              initial={{ opacity: 0, y: 6 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.18 }}
-              className="flex flex-col h-full min-h-0"
-            >
-              {/* ── TRENDING / DISCOVER ── */}
-              {(activeTab === "trending" || activeTab === "discover") && (
-                <>
-                  {/* Header */}
-                  <div
-                    className="flex items-center justify-between px-6 pt-4 pb-2 shrink-0"
-                    style={{ borderBottom: "1px solid var(--border)" }}
-                  >
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span
-                          style={{
-                            color: "#18D3D1",
-                            fontWeight: 800,
-                            fontSize: "1.5rem",
-                            letterSpacing: "-0.03em",
-                          }}
-                        >
-                          TrendIQ
-                        </span>
-                        <div
-                          className="px-1.5 py-0.5 rounded-md"
-                          style={{
-                            background: "rgba(24,211,209,0.12)",
-                            border: "1px solid rgba(24,211,209,0.2)",
-                          }}
-                        >
-                          <span style={{ color: "#18D3D1", fontSize: "0.55rem", fontWeight: 700, letterSpacing: "0.08em" }}>
-                            BETA
-                          </span>
-                        </div>
-                      </div>
-                      <p style={{ color: "var(--muted-foreground)", fontSize: "0.72rem", marginTop: "1px" }}>
-                        Find what's worth the hype.
-                      </p>
-                    </div>
-                    <button
-                      className="w-9 h-9 flex items-center justify-center rounded-full"
-                      style={{ background: "var(--secondary)", border: "1px solid var(--border)" }}
-                    >
-                      <Bell size={15} style={{ color: "var(--muted-foreground)" }} />
-                    </button>
-                  </div>
-
-                  {/* Search bar */}
-                  <div className="px-4 py-3 shrink-0">
-                    <div
-                      className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-2xl"
-                      style={{ background: "var(--secondary)", border: "1px solid var(--border)" }}
-                    >
-                      <Search size={15} style={{ color: "var(--muted-foreground)", flexShrink: 0 }} />
-                      <input
-                        type="text"
-                        placeholder="Search products, trends…"
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        className="flex-1 bg-transparent outline-none"
-                        style={{ color: "var(--foreground)", fontSize: "0.85rem", border: "none" }}
-                      />
-                      {searchQuery && (
-                        <button
-                          onClick={() => setSearchQuery("")}
-                          className="w-4 h-4 flex items-center justify-center rounded-full shrink-0"
-                          style={{ background: "var(--muted-foreground)" }}
-                        >
-                          <span style={{ color: "var(--background)", fontSize: "0.6rem", fontWeight: 700 }}>×</span>
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Category chips */}
-                  <div
-                    className="shrink-0 overflow-x-auto px-4 pb-3"
-                    style={{ scrollbarWidth: "none" }}
-                  >
-                    <div className="flex gap-2 w-max">
-                      {["All", ...CATEGORIES].map((cat) => {
-                        const isActive = activeCategory === cat;
-                        return (
-                          <button
-                            key={cat}
-                            onClick={() => setActiveCategory(cat as Category | "All")}
-                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full transition-all duration-150 shrink-0"
-                            style={{
-                              background: isActive ? "rgba(24,211,209,0.12)" : "var(--secondary)",
-                              border: isActive ? "1px solid rgba(24,211,209,0.3)" : "1px solid var(--border)",
-                              color: isActive ? "#18D3D1" : "var(--muted-foreground)",
-                              fontSize: "0.72rem",
-                              fontWeight: isActive ? 600 : 400,
-                              boxShadow: isActive ? "0 0 12px rgba(24,211,209,0.15)" : "none",
-                            }}
-                          >
-                            {CATEGORY_ICONS[cat]}
-                            {cat}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  {/* Section header */}
-                  <div className="flex items-center justify-between px-4 mb-2 shrink-0">
-                    <div className="flex items-center gap-2">
-                      <Flame size={13} style={{ color: "#FF6314" }} />
-                      <span style={{ color: "var(--foreground)", fontSize: "0.78rem", fontWeight: 700 }}>
-                        {activeCategory === "All" ? "Trending Now" : activeCategory}
-                      </span>
-                      <span
-                        className="px-1.5 py-0.5 rounded-md"
-                        style={{ background: "rgba(255,99,20,0.12)", color: "#FF6314", fontSize: "0.6rem", fontWeight: 700 }}
-                      >
-                        {filteredProducts.length}
-                      </span>
-                    </div>
-                    <span style={{ color: "var(--muted-foreground)", fontSize: "0.7rem" }}>See all</span>
-                  </div>
-
-                  {/* Feed */}
-                  <div
-                    className="flex-1 overflow-y-auto px-4 pb-6"
-                    style={{ scrollbarWidth: "none" }}
-                  >
-                    {filteredProducts.length === 0 ? (
-                      <div className="flex flex-col items-center justify-center h-40 gap-2">
-                        <Search size={28} style={{ color: "var(--muted-foreground)", opacity: 0.4 }} />
-                        <p style={{ color: "var(--muted-foreground)", fontSize: "0.82rem" }}>No results found</p>
-                      </div>
-                    ) : (
-                      <div className="flex flex-col gap-3">
-                        {filteredProducts.map((product) => (
-                          <motion.div
-                            key={product.id}
-                            initial={{ opacity: 0, y: 10 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            transition={{ duration: 0.2 }}
-                          >
-                            <ProductCard product={product} onTap={setSelectedProduct} />
-                          </motion.div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </>
-              )}
-
-              {/* ── COMPARE ── */}
-              {activeTab === "compare" && <CompareScreen />}
-
-              {/* ── FOR YOU ── */}
-              {activeTab === "foryou" && <ForYouScreen onTapProduct={setSelectedProduct} />}
-
-              {/* Bottom nav */}
-              <div
-                className="shrink-0 flex items-center justify-around py-3 px-6"
-                style={{
-                  position: "sticky",
-                  bottom: 0,
-                  zIndex: 20,
-                  background: "var(--card)",
-                  borderTop: "1px solid var(--border)",
-                }}
-              >
-                {NAV_ITEMS.map(({ id, icon, label }) => {
-                  const active = activeTab === id;
-                  return (
-                    <button
-                      key={id}
-                      onClick={() => handleTabChange(id)}
-                      className="flex flex-col items-center gap-1"
-                    >
-                      <span style={{ color: active ? "#18D3D1" : "var(--muted-foreground)" }}>{icon}</span>
-                      <span
-                        style={{
-                          color: active ? "#18D3D1" : "var(--muted-foreground)",
-                          fontSize: "0.6rem",
-                          fontWeight: active ? 600 : 400,
-                        }}
-                      >
-                        {label}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
+        {selectedProduct ? (
+          <ProductAnalysisScreen
+            product={selectedProduct}
+            onBack={() => setSelectedProduct(null)}
+            client={client}
+          />
+        ) : catalogState.phase === "ready" ? (
+          <ControlledCatalogView
+            products={catalogState.products}
+            searchQuery={searchQuery}
+            onSearchChange={setSearchQuery}
+            onSelect={setSelectedProduct}
+          />
+        ) : (
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center" aria-live="polite">
+            <ShieldCheck size={24} style={{ color: catalogState.phase === "loading" ? "#18D3D1" : "#FFB547" }} />
+            <p style={{ color: "var(--foreground)", fontSize: "0.82rem", fontWeight: 700 }}>
+              {catalogState.phase === "loading" ? "Loading controlled catalog…" : "Controlled catalog unavailable"}
+            </p>
+            <p style={{ color: "var(--muted-foreground)", fontSize: "0.7rem", lineHeight: 1.5 }}>
+              {catalogState.phase === "loading"
+                ? "No analysis runs while the catalog loads."
+                : "No product analysis is available from this page right now."}
+            </p>
+          </div>
+        )}
       </div>
     </div>
   );

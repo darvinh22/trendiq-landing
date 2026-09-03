@@ -43,6 +43,49 @@ describe("ConsumerResultPanel", () => {
     expect(html).toContain("Momentum unavailable");
   });
 
+  it("shows live coverage when a numeric Score is degraded", () => {
+    const html = renderPanel(createConsumerProductResultFixture({
+      score: 68,
+      scoreStatus: "degraded",
+      liveCoveragePercent: 62.5,
+    }));
+
+    expect(html).toContain("68");
+    expect(html).toContain("Evidence limited");
+    expect(html).toContain("Live evidence coverage: 62.5%");
+  });
+
+  it("states that Confidence is evidence quality rather than correctness probability", () => {
+    const html = renderPanel(createConsumerProductResultFixture({ confidence: 84 }));
+
+    expect(html).toContain("84 evidence quality");
+    expect(html).toContain("Confidence measures evidence quality");
+    expect(html).toContain("not the probability that the recommendation is correct");
+  });
+
+  it("renders the actual missing-evidence list", () => {
+    const html = renderPanel(createConsumerProductResultFixture({
+      missingEvidence: ["reviewText", "freshness", "absoluteDemand"],
+    }));
+
+    expect(html).toContain("MISSING EVIDENCE");
+    expect(html).toContain("Review text unavailable");
+    expect(html).toContain("Freshness unavailable");
+    expect(html).toContain("Absolute search demand unavailable");
+  });
+
+  it("renders safe evaluation time and evidence age", () => {
+    const html = renderPanel(createConsumerProductResultFixture({
+      evaluatedAt: "2026-09-01T12:34:00.000Z",
+      freshnessStatus: "degraded",
+      freshnessAgeHours: 36.5,
+    }));
+
+    expect(html).toContain("2026-09-01 12:34 UTC");
+    expect(html).toContain("Evidence freshness");
+    expect(html).toContain("Evidence limited · 36.5 hours old");
+  });
+
   it("renders aggregate, consensus, recent, and text evidence separately", () => {
     const html = renderPanel(createConsumerProductResultFixture());
 
