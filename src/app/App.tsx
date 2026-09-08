@@ -61,8 +61,11 @@ export function ControlledCatalogView({
             CONTROLLED ALPHA
           </span>
         </div>
-        <p style={{ color: "var(--muted-foreground)", fontSize: "0.75rem", lineHeight: 1.5, marginTop: 5 }}>
-          Analyze products that have an approved, server-controlled evidence path.
+        <p style={{ color: "var(--foreground)", fontSize: "1rem", fontWeight: 800, lineHeight: 1.4, marginTop: 8 }}>
+          Find what&apos;s worth the hype.
+        </p>
+        <p style={{ color: "var(--muted-foreground)", fontSize: "0.75rem", lineHeight: 1.5, marginTop: 4 }}>
+          TrendIQ uses supported evidence to help you decide whether a product is worth considering.
         </p>
       </header>
 
@@ -86,7 +89,7 @@ export function ControlledCatalogView({
         <div className="flex items-center gap-2 mb-3">
           <ShieldCheck size={14} style={{ color: "#18D3D1" }} />
           <p style={{ color: "var(--muted-foreground)", fontSize: "0.7rem", lineHeight: 1.45 }}>
-            Browsing and filtering do not run an analysis. Provider work starts only after you choose Analyze.
+            Browsing and filtering do not start an analysis. A fresh evidence check starts only after you choose Analyze.
           </p>
         </div>
 
@@ -117,7 +120,7 @@ export function ControlledCatalogView({
                 <div className="flex items-center gap-1.5 mt-4">
                   <Sparkles size={13} style={{ color: "#18D3D1" }} />
                   <span style={{ color: "#18D3D1", fontSize: "0.7rem", fontWeight: 700 }}>
-                    Open controlled analysis
+                    View product analysis
                   </span>
                 </div>
               </button>

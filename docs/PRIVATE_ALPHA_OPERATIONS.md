@@ -6,6 +6,8 @@ alpha. It does not describe a public or multi-replica deployment.
 ## Deployment contract
 
 - Run exactly one Node process and exactly one deployment replica.
+- Disable auto-scaling and rolling deployment overlap so two application
+  processes are never active at the same time.
 - Build with `npm run build` and start with `npm start`. Vite preview is not the
   production server.
 - Terminate HTTPS at the deployment edge.
@@ -31,6 +33,12 @@ alpha. It does not describe a public or multi-replica deployment.
    analysis. Treat the application analysis ID as the support correlation ID.
 5. Do not enable automated retries. Analyze and Retry remain explicit user
    actions.
+
+`/health` is the liveness signal. `/ready` is an operator readiness and
+operational signal; it must not be configured to trigger automatic process
+restart. In particular, process paid-operation ceiling exhaustion makes
+`/ready` fail closed and must not cause a restart, because a deliberate restart
+resets the process-lifetime paid-operation counter.
 
 ## Kill switch and cost ceiling
 

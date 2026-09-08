@@ -45,6 +45,22 @@ describe("product analysis browser client", () => {
     expect(Object.keys(JSON.parse(String(init.body)))).toEqual(["productId"]);
   });
 
+  it("distinguishes a retryable browser request failure from a settled analysis failure", async () => {
+    const fetchMock = vi.fn()
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce(jsonResponse({ status: "error", reason: "analysis_failed" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(productAnalysisClient.start("ray-ban-meta")).resolves.toEqual({
+      status: "error",
+      reason: "request_failed",
+    });
+    await expect(productAnalysisClient.start("ray-ban-meta")).resolves.toEqual({
+      status: "error",
+      reason: "analysis_failed",
+    });
+  });
+
   it("rejects catalog records with any extra or unsafe field", () => {
     expect(parseControlledProductCatalogResponse({
       ...catalog,

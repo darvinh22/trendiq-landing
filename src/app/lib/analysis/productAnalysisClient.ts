@@ -5,23 +5,27 @@ import {
   type ProductAnalysisResponse,
 } from "./productAnalysisContract";
 
+export type ProductAnalysisClientResponse =
+  | ProductAnalysisResponse
+  | { status: "error"; reason: "request_failed" };
+
 export interface ProductAnalysisClient {
   listCatalog(): Promise<ControlledProductCatalogResponse | null>;
-  start(productId: string): Promise<ProductAnalysisResponse>;
-  getStatus(analysisId: string): Promise<ProductAnalysisResponse>;
+  start(productId: string): Promise<ProductAnalysisClientResponse>;
+  getStatus(analysisId: string): Promise<ProductAnalysisClientResponse>;
 }
 
 export type ProductAnalysisExecutionClient = Pick<ProductAnalysisClient, "start" | "getStatus">;
 
-async function readResponse(response: Response): Promise<ProductAnalysisResponse> {
+async function readResponse(response: Response): Promise<ProductAnalysisClientResponse> {
   let body: unknown;
   try {
     body = await response.json();
   } catch {
-    return { status: "error", reason: "analysis_failed" };
+    return { status: "error", reason: "request_failed" };
   }
 
-  return parseProductAnalysisResponse(body) ?? { status: "error", reason: "analysis_failed" };
+  return parseProductAnalysisResponse(body) ?? { status: "error", reason: "request_failed" };
 }
 
 export const productAnalysisClient: ProductAnalysisClient = {
@@ -45,7 +49,7 @@ export const productAnalysisClient: ProductAnalysisClient = {
         body: JSON.stringify({ productId }),
       }));
     } catch {
-      return { status: "error", reason: "analysis_failed" };
+      return { status: "error", reason: "request_failed" };
     }
   },
 
@@ -56,7 +60,7 @@ export const productAnalysisClient: ProductAnalysisClient = {
         headers: { Accept: "application/json" },
       }));
     } catch {
-      return { status: "error", reason: "analysis_failed" };
+      return { status: "error", reason: "request_failed" };
     }
   },
 };

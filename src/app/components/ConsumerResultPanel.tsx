@@ -211,7 +211,7 @@ export function ConsumerResultPanel({ consumerResult, productId }: ConsumerResul
           <ul className="space-y-2">
             {view.take.reasons.map((reason) => (
               <li key={reason.code} style={{ color: "var(--foreground)", fontSize: "0.75rem", lineHeight: 1.5 }}>
-                <span style={{ color: "#18D3D1", fontWeight: 700 }}>{reason.code}</span>: {reason.message}
+                {reason.message}
               </li>
             ))}
           </ul>

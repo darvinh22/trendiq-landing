@@ -30,6 +30,15 @@ function renderCatalog(query = ""): string {
 }
 
 describe("controlled external alpha surface", () => {
+  it("leads with a truthful consumer promise", () => {
+    const html = renderCatalog();
+
+    expect(html).toMatch(/Find what(?:'|&#x27;)s worth the hype\./);
+    expect(html).toContain("supported evidence");
+    expect(html).toContain("worth considering");
+    expect(html).not.toMatch(/guarantee|certain|exhaustive|all reviews|all evidence/i);
+  });
+
   it("renders only the controlled catalog and none of the legacy intelligence surfaces", () => {
     const html = renderCatalog();
     expect(html).toContain("Ray-Ban Meta Glasses");

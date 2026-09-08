@@ -1,9 +1,13 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import type { ProductAnalysisExecutionClient } from "../../lib/analysis/productAnalysisClient";
-import type { ControlledProductCatalogItem, ProductAnalysisResponse } from "../../lib/analysis/productAnalysisContract";
+import type {
+  ProductAnalysisClientResponse,
+  ProductAnalysisExecutionClient,
+} from "../../lib/analysis/productAnalysisClient";
+import type { ControlledProductCatalogItem } from "../../lib/analysis/productAnalysisContract";
 import { createConsumerProductResultFixture } from "../../lib/presentation/__tests__/consumerProductResultFixture";
 import {
+  canRetryProductAnalysis,
   ProductAnalysisScreen,
   ProductAnalysisView,
   pollProductAnalysisUntilSettled,
@@ -27,7 +31,7 @@ function renderState(state: Exclude<ProductAnalysisUiState, { phase: "completed"
   );
 }
 
-function clientWithStatuses(statuses: ProductAnalysisResponse[]) {
+function clientWithStatuses(statuses: ProductAnalysisClientResponse[]) {
   const start = vi.fn(async () => ({ status: "pending", analysisId: "analysis_fixture123" }) as const);
   const getStatus = vi.fn(async () => statuses.shift() ?? ({ status: "pending", analysisId: "analysis_fixture123" } as const));
   return { client: { start, getStatus } satisfies ProductAnalysisExecutionClient, start, getStatus };
@@ -37,13 +41,17 @@ describe("ProductAnalysisScreen", () => {
   it("starts with a controlled Analyze action and no legacy intelligence", () => {
     const html = renderState({ phase: "idle" });
     expect(html).toContain("Analyze");
-    expect(html).toContain("server-validated evidence");
+    expect(html).toContain("supported evidence");
+    expect(html).toContain("worth considering");
     expect(html).not.toMatch(/TrendIQ Says|TikTok|Reddit|\$299|Best For/i);
   });
 
   it("renders analyzing and pending states truthfully", () => {
-    expect(renderState({ phase: "analyzing" })).toContain("Analyzing controlled evidence");
-    expect(renderState({ phase: "pending", analysisId: "analysis_fixture123" })).toContain("Analysis pending");
+    const analyzing = renderState({ phase: "analyzing" });
+    const pending = renderState({ phase: "pending", analysisId: "analysis_fixture123" });
+    expect(analyzing).toContain("Checking available evidence");
+    expect(pending).toContain("Finishing your analysis");
+    expect(`${analyzing}${pending}`).not.toMatch(/server|provider|polling|runtime|operator/i);
   });
 
   it("renders a completed ConsumerProductResult through the controlled result view", () => {
@@ -60,27 +68,54 @@ describe("ProductAnalysisScreen", () => {
     expect(html).not.toMatch(/TIKTOK SAYS|REDDIT SENTIMENT|Similar Alternatives/i);
   });
 
-  it("renders unavailable, safe error, and polling-deadline states with explicit retry", () => {
+  it("renders settled unavailable without Retry and transient states with explicit Retry", () => {
     const unavailable = renderState({ phase: "unavailable", reason: "evidence_unavailable" });
-    const error = renderState({ phase: "error", reason: "analysis_failed" });
+    const error = renderState({ phase: "error", reason: "request_failed" });
     const deadline = renderState({ phase: "polling_timeout" });
-    expect(unavailable).toContain("Qualified live evidence is unavailable");
-    expect(error).toContain("safe application error");
-    expect(deadline).toContain("polling window ended");
-    expect(deadline).toContain("No new analysis was started");
-    for (const html of [unavailable, error, deadline]) expect(html).toContain("Retry");
+    expect(unavailable).toContain("not enough supported evidence");
+    expect(unavailable).not.toContain("Retry");
+    expect(error).toContain("Something interrupted this request");
+    expect(error).toContain("Retry");
+    expect(deadline).toContain("taking longer than expected");
+    expect(deadline).toContain("without starting a second analysis");
+    expect(deadline).toContain("Retry");
   });
 
   it.each([
-    ["analysis_disabled", "temporarily disabled by the operator"],
-    ["process_paid_operation_ceiling_exhausted", "private-alpha analysis limit has been reached"],
-    ["analysis_deadline_exceeded", "server analysis window ended"],
-    ["runtime_not_ready", "service is not ready"],
-  ] as const)("renders the safe runtime reason %s truthfully", (reason, expectedText) => {
+    ["analysis_disabled", "Analysis is temporarily unavailable"],
+    ["process_paid_operation_ceiling_exhausted", "private alpha has reached its analysis limit"],
+    ["analysis_deadline_exceeded", "analysis took too long to complete"],
+    ["runtime_not_ready", "Please come back later"],
+    ["evidence_unavailable", "not enough supported evidence"],
+    ["product_not_supported", "product is not available for analysis"],
+    ["analysis_failed", "analysis could not be completed"],
+  ] as const)("renders the non-retryable safe reason %s without internal language or Retry", (reason, expectedText) => {
     const html = renderState({ phase: "unavailable", reason });
     expect(html).toContain(expectedText);
-    expect(html).toContain("Retry");
-    expect(html).not.toMatch(/credential|authorization|provider task|stack trace/i);
+    expect(html).not.toContain("Retry");
+    expect(html).not.toContain(reason);
+    expect(html).not.toMatch(/credential|authorization|provider|operator|server|polling|runtime|process budget|stack trace/i);
+  });
+
+  it("offers Retry only for public states where another explicit attempt can reasonably help", () => {
+    expect(canRetryProductAnalysis({ phase: "error", reason: "request_failed" })).toBe(true);
+    expect(canRetryProductAnalysis({ phase: "unavailable", reason: "analysis_not_found" })).toBe(true);
+    expect(canRetryProductAnalysis({ phase: "polling_timeout" })).toBe(true);
+    expect(renderState({ phase: "unavailable", reason: "analysis_not_found" })).toContain("Retry");
+
+    for (const reason of [
+      "analysis_failed",
+      "analysis_disabled",
+      "analysis_deadline_exceeded",
+      "evidence_unavailable",
+      "invalid_request",
+      "process_paid_operation_ceiling_exhausted",
+      "product_binding_mismatch",
+      "product_not_supported",
+      "runtime_not_ready",
+    ] as const) {
+      expect(canRetryProductAnalysis({ phase: "unavailable", reason })).toBe(false);
+    }
   });
 
   it("has deterministic analyze, response, deadline, and retry transitions", () => {

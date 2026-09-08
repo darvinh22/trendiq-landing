@@ -3,11 +3,11 @@ import { ArrowLeft, LoaderCircle, RefreshCw, ShieldCheck, Sparkles } from "lucid
 import { ConsumerResultPanel } from "./ConsumerResultPanel";
 import {
   productAnalysisClient,
+  type ProductAnalysisClientResponse,
   type ProductAnalysisExecutionClient,
 } from "../lib/analysis/productAnalysisClient";
 import type {
   ControlledProductCatalogItem,
-  ProductAnalysisResponse,
   ProductAnalysisSafeReason,
 } from "../lib/analysis/productAnalysisContract";
 import type { ConsumerProductResult } from "../lib/data/consumerResult";
@@ -15,18 +15,20 @@ import type { ConsumerProductResult } from "../lib/data/consumerResult";
 export const PRODUCT_ANALYSIS_POLL_INTERVAL_MS = 750;
 export const PRODUCT_ANALYSIS_MAX_POLL_ATTEMPTS = 80;
 
+export type ProductAnalysisUiReason = ProductAnalysisSafeReason | "request_failed";
+
 export type ProductAnalysisUiState =
   | { phase: "idle" }
   | { phase: "analyzing" }
   | { phase: "pending"; analysisId: string }
   | { phase: "polling_timeout" }
   | { phase: "completed"; result: ConsumerProductResult }
-  | { phase: "unavailable"; reason: ProductAnalysisSafeReason }
-  | { phase: "error"; reason: ProductAnalysisSafeReason };
+  | { phase: "unavailable"; reason: ProductAnalysisUiReason }
+  | { phase: "error"; reason: ProductAnalysisUiReason };
 
 export type ProductAnalysisUiAction =
   | { type: "analyze" }
-  | { type: "response"; response: ProductAnalysisResponse }
+  | { type: "response"; response: ProductAnalysisClientResponse }
   | { type: "pollingDeadline" }
   | { type: "retry" };
 
@@ -46,7 +48,7 @@ export function productAnalysisUiReducer(
 }
 
 export type ProductAnalysisPollingOutcome =
-  | { status: "settled"; response: Exclude<ProductAnalysisResponse, { status: "pending" }> }
+  | { status: "settled"; response: Exclude<ProductAnalysisClientResponse, { status: "pending" }> }
   | { status: "deadline" }
   | { status: "cancelled" };
 
@@ -75,11 +77,11 @@ export async function pollProductAnalysisUntilSettled(
     await wait(intervalMs);
     if (shouldStop()) return { status: "cancelled" };
 
-    let response: ProductAnalysisResponse;
+    let response: ProductAnalysisClientResponse;
     try {
       response = await client.getStatus(analysisId);
     } catch {
-      response = { status: "error", reason: "analysis_failed" };
+      response = { status: "error", reason: "request_failed" };
     }
     if (shouldStop()) return { status: "cancelled" };
     if (response.status !== "pending") return { status: "settled", response };
@@ -91,11 +93,11 @@ export async function pollProductAnalysisUntilSettled(
 export async function requestProductAnalysis(
   client: ProductAnalysisExecutionClient,
   productId: string
-): Promise<ProductAnalysisResponse> {
+): Promise<ProductAnalysisClientResponse> {
   try {
     return await client.start(productId);
   } catch {
-    return { status: "error", reason: "analysis_failed" };
+    return { status: "error", reason: "request_failed" };
   }
 }
 
@@ -107,23 +109,44 @@ interface ProductAnalysisViewProps {
   onBack: () => void;
 }
 
-function safeReasonText(reason: ProductAnalysisSafeReason): string {
-  if (reason === "product_not_supported") return "This product is not enabled for controlled analysis.";
-  if (reason === "evidence_unavailable") return "Qualified live evidence is unavailable right now.";
-  if (reason === "analysis_disabled") return "Analysis is temporarily disabled by the operator.";
+function safeReasonText(reason: ProductAnalysisUiReason): string {
+  if (reason === "product_not_supported") return "This product is not available for analysis.";
+  if (reason === "evidence_unavailable") {
+    return "There is not enough supported evidence to complete this analysis right now.";
+  }
+  if (reason === "analysis_disabled") return "Analysis is temporarily unavailable.";
   if (reason === "process_paid_operation_ceiling_exhausted") {
-    return "The private-alpha analysis limit has been reached. No provider work was started.";
+    return "The private alpha has reached its analysis limit. No new analysis was started.";
   }
   if (reason === "analysis_deadline_exceeded") {
-    return "The server analysis window ended without a safe result. No second analysis was started.";
+    return "This analysis took too long to complete. No new analysis was started.";
   }
-  if (reason === "runtime_not_ready") return "Analysis is temporarily unavailable while the service is not ready.";
-  return "The analysis could not be completed safely.";
+  if (reason === "runtime_not_ready") return "Analysis is temporarily unavailable. Please come back later.";
+  if (reason === "analysis_not_found") return "This analysis is no longer available. You can start a new attempt.";
+  if (reason === "invalid_request") return "This analysis request could not be accepted.";
+  if (reason === "product_binding_mismatch") return "This result could not be verified for the selected product.";
+  if (reason === "request_failed") return "Something interrupted this request. You can try again.";
+  return "This analysis could not be completed. Please come back later.";
+}
+
+export function canRetryProductAnalysis(state: ProductAnalysisUiState): boolean {
+  if (state.phase === "polling_timeout") return true;
+  if (state.phase === "error") return state.reason === "request_failed" || state.reason === "analysis_not_found";
+  return state.phase === "unavailable" && state.reason === "analysis_not_found";
+}
+
+function terminalStateText(state: ProductAnalysisUiState): string | null {
+  if (state.phase === "unavailable" || state.phase === "error") return safeReasonText(state.reason);
+  if (state.phase === "polling_timeout") {
+    return "This analysis is taking longer than expected. You can check again without starting a second analysis.";
+  }
+  return null;
 }
 
 export function ProductAnalysisView({ product, state, onAnalyze, onRetry, onBack }: ProductAnalysisViewProps) {
   const isWorking = state.phase === "analyzing" || state.phase === "pending";
-  const canRetry = state.phase === "unavailable" || state.phase === "error" || state.phase === "polling_timeout";
+  const canRetry = canRetryProductAnalysis(state);
+  const terminalMessage = terminalStateText(state);
 
   return (
     <div className="flex flex-col h-full" style={{ background: "var(--background)" }}>
@@ -147,7 +170,7 @@ export function ProductAnalysisView({ product, state, onAnalyze, onRetry, onBack
           <div className="flex items-center gap-2 mt-4">
             <ShieldCheck size={14} style={{ color: "#18D3D1", flexShrink: 0 }} />
             <p style={{ color: "var(--muted-foreground)", fontSize: "0.7rem", lineHeight: 1.5 }}>
-              TrendIQ will use only controlled, server-validated evidence for this result.
+              TrendIQ checks supported evidence to help you decide whether this product is worth considering.
             </p>
           </div>
         </div>
@@ -166,30 +189,28 @@ export function ProductAnalysisView({ product, state, onAnalyze, onRetry, onBack
           <div className="flex flex-col items-center gap-3 py-4" aria-live="polite">
             <LoaderCircle className="animate-spin" size={24} style={{ color: "#18D3D1" }} />
             <p style={{ color: "var(--foreground)", fontSize: "0.82rem", fontWeight: 700 }}>
-              {state.phase === "analyzing" ? "Analyzing controlled evidence…" : "Analysis pending…"}
+              {state.phase === "analyzing" ? "Checking available evidence…" : "Finishing your analysis…"}
             </p>
             <p style={{ color: "var(--muted-foreground)", fontSize: "0.7rem", textAlign: "center" }}>
-              The application checks for a result within a bounded polling window.
+              This can take a moment. TrendIQ will show only what the available evidence supports.
             </p>
           </div>
         )}
 
-        {canRetry && (
+        {terminalMessage && (
           <div className="flex flex-col items-center gap-3 py-4" aria-live="polite">
             <p style={{ color: state.phase === "error" ? "#FF8C8C" : "#FFB547", fontSize: "0.8rem", textAlign: "center" }}>
-              {state.phase === "unavailable"
-                ? safeReasonText(state.reason)
-                : state.phase === "polling_timeout"
-                  ? "The application polling window ended before a result was ready. No new analysis was started."
-                  : "A safe application error occurred."}
+              {terminalMessage}
             </p>
-            <button
-              onClick={onRetry}
-              className="flex items-center justify-center gap-2 rounded-xl px-4 py-2.5"
-              style={{ background: "var(--secondary)", border: "1px solid var(--border)", color: "var(--foreground)", fontSize: "0.76rem", fontWeight: 700 }}
-            >
-              <RefreshCw size={14} /> Retry
-            </button>
+            {canRetry && (
+              <button
+                onClick={onRetry}
+                className="flex items-center justify-center gap-2 rounded-xl px-4 py-2.5"
+                style={{ background: "var(--secondary)", border: "1px solid var(--border)", color: "var(--foreground)", fontSize: "0.76rem", fontWeight: 700 }}
+              >
+                <RefreshCw size={14} /> Retry
+              </button>
+            )}
           </div>
         )}
       </div>

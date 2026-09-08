@@ -104,6 +104,16 @@ describe("ConsumerResultPanel", () => {
     expect(html).toContain(warning);
   });
 
+  it("renders readable result reasons without exposing internal reason codes", () => {
+    const result = createConsumerProductResultFixture({ recommendation: "WAIT" });
+    const html = renderPanel(result);
+
+    expect(html).toContain("Verified current search direction is cooling.");
+    for (const reason of result.explanation.reasons) {
+      expect(html).not.toContain(reason.code);
+    }
+  });
+
   it("renders Best For, social, review themes, and commerce as unavailable", () => {
     const html = renderPanel(createConsumerProductResultFixture());
 
