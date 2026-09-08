@@ -18,6 +18,8 @@ import {
 import { readSearchProviderConfig, shouldUseLiveSearch } from "../../app/lib/data/search/config";
 import type { NormalizedTrendSignal, TrendSignalProvider } from "../../app/lib/data/types";
 import { ProviderRequestBudget, type ProviderRequestUsage } from "./providerRequestBudget";
+import type { RuntimeEnvironment } from "../runtime/runtimeConfig";
+import type { ProcessPaidOperationGuard } from "../runtime/processPaidOperationGuard";
 
 export type EvidencePathStatus = "completed" | "unavailable";
 
@@ -27,10 +29,20 @@ export interface AnalysisEvidenceCollection {
   reviewStatus: EvidencePathStatus;
   signals: NormalizedTrendSignal[];
   usage: ProviderRequestUsage;
+  processPaidOperationRejected?: boolean;
+}
+
+export interface AnalysisExecutionContext {
+  canRequest?: () => boolean;
+  onUsage?: (usage: ProviderRequestUsage) => void;
 }
 
 export interface AnalysisEvidenceCollector {
-  collect(profile: ProductProfile, now: () => Date): Promise<AnalysisEvidenceCollection>;
+  collect(
+    profile: ProductProfile,
+    now: () => Date,
+    context?: AnalysisExecutionContext
+  ): Promise<AnalysisEvidenceCollection>;
 }
 
 const EMPTY_REVIEW_FALLBACK: TrendSignalProvider = {
@@ -45,8 +57,18 @@ function runtimeFetch(): FetchLike | undefined {
 }
 
 export class ProductionAnalysisEvidenceCollector implements AnalysisEvidenceCollector {
-  async collect(profile: ProductProfile, now: () => Date): Promise<AnalysisEvidenceCollection> {
-    const fetchImpl = runtimeFetch();
+  constructor(private readonly options: {
+    env?: RuntimeEnvironment;
+    fetchImpl?: FetchLike;
+    processPaidOperationGuard?: ProcessPaidOperationGuard;
+  } = {}) {}
+
+  async collect(
+    profile: ProductProfile,
+    now: () => Date,
+    context: AnalysisExecutionContext = {}
+  ): Promise<AnalysisEvidenceCollection> {
+    const fetchImpl = this.options.fetchImpl ?? runtimeFetch();
     if (!fetchImpl) {
       return {
         productId: profile.productId,
@@ -57,10 +79,24 @@ export class ProductionAnalysisEvidenceCollector implements AnalysisEvidenceColl
       };
     }
 
-    const budget = new ProviderRequestBudget(fetchImpl);
+    let processPaidOperationRejected = false;
+    const budget = new ProviderRequestBudget(
+      fetchImpl,
+      undefined,
+      undefined,
+      undefined,
+      {
+        canRequest: context.canRequest,
+        onProcessPaidOperationRejected: () => {
+          processPaidOperationRejected = true;
+        },
+        onUsage: context.onUsage,
+        processPaidOperationGuard: this.options.processPaidOperationGuard,
+      }
+    );
     const executionState = new InMemorySignalExecutionStateStore();
-    const searchConfig = readSearchProviderConfig(undefined, { now });
-    const reviewBaseConfig = readReviewProviderConfig(undefined, { now });
+    const searchConfig = readSearchProviderConfig(this.options.env, { now });
+    const reviewBaseConfig = readReviewProviderConfig(this.options.env, { now });
     const reviewConfig = {
       ...reviewBaseConfig,
       taskPollAttempts: Math.min(reviewBaseConfig.taskPollAttempts, 3),
@@ -125,6 +161,7 @@ export class ProductionAnalysisEvidenceCollector implements AnalysisEvidenceColl
       reviewStatus,
       signals,
       usage: budget.usage(),
+      processPaidOperationRejected,
     };
   }
 }

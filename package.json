@@ -4,11 +4,14 @@
   "version": "0.0.1",
   "type": "module",
   "scripts": {
-    "build": "vite build",
+    "build": "npm run build:client && npm run build:server",
+    "build:client": "vite build",
+    "build:server": "vite build --config vite.server.config.ts",
     "dev": "vite",
     "report:ray-ban-provenance": "node scripts/ray-ban-provenance-report.mjs",
     "reddit:diagnostic": "node scripts/reddit-live-diagnostic.mjs",
     "snapshot:live": "node scripts/snapshot-live.mjs",
+    "start": "node dist-server/server.mjs",
     "test": "vitest run"
   },
   "dependencies": {

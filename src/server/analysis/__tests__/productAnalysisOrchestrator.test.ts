@@ -106,6 +106,90 @@ describe("ProductAnalysisOrchestrator", () => {
     expect(collect).toHaveBeenCalledTimes(1);
   });
 
+  it("moves a pending server job to a truthful deadline terminal state without starting another analysis", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveCollection!: (value: AnalysisEvidenceCollection) => void;
+      const deferred = new Promise<AnalysisEvidenceCollection>((resolve) => {
+        resolveCollection = resolve;
+      });
+      const collect = vi.fn((_profile, _now, context) => {
+        context?.onUsage?.({ httpRequestCount: 1, paidOperationCount: 1, taskPostCount: 1 });
+        return deferred;
+      });
+      const logger = { log: vi.fn() };
+      const orchestrator = new ProductAnalysisOrchestrator({
+        evidenceCollector: { collect } as AnalysisEvidenceCollector,
+        now: () => new Date(NOW),
+        clockMs: Date.now,
+        idFactory: () => "analysis_deadlinefixture",
+        jobDeadlineMs: 100,
+        logger,
+      });
+
+      const started = orchestrator.analyzeProduct(PRODUCT_ID);
+      if (started.status !== "pending") throw new Error("expected pending");
+      await vi.advanceTimersByTimeAsync(100);
+
+      await expect(orchestrator.waitForSettled(started.analysisId)).resolves.toEqual({
+        status: "unavailable",
+        reason: "analysis_deadline_exceeded",
+      });
+      expect(orchestrator.analyzeProduct(PRODUCT_ID)).toEqual({
+        status: "unavailable",
+        reason: "analysis_deadline_exceeded",
+      });
+      expect(collect).toHaveBeenCalledTimes(1);
+      expect(logger.log).toHaveBeenLastCalledWith(expect.objectContaining({
+        event: "analysis_settled",
+        analysisId: started.analysisId,
+        httpRequestCount: 1,
+        paidOperationCount: 1,
+        taskPostCount: 1,
+        finalStatus: "unavailable",
+        reason: "analysis_deadline_exceeded",
+      }));
+
+      resolveCollection(collection());
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(orchestrator.getAnalysisStatus(started.analysisId)).toEqual({
+        status: "unavailable",
+        reason: "analysis_deadline_exceeded",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("expires settled in-memory jobs only when a later explicit analysis request prunes them", async () => {
+    let currentMs = Date.parse(NOW);
+    let id = 0;
+    const collect = vi.fn(async () => collection());
+    const orchestrator = new ProductAnalysisOrchestrator({
+      evidenceCollector: { collect } as AnalysisEvidenceCollector,
+      now: () => new Date(currentMs),
+      clockMs: () => currentMs,
+      controlledWindowMs: 1_000,
+      idFactory: () => `analysis_cleanupfixture0${++id}`,
+    });
+
+    const first = orchestrator.analyzeProduct(PRODUCT_ID);
+    if (first.status !== "pending") throw new Error("expected pending");
+    await orchestrator.waitForSettled(first.analysisId);
+    expect(orchestrator.analyzeProduct(PRODUCT_ID).status).toBe("completed");
+
+    currentMs += 1_001;
+    const second = orchestrator.analyzeProduct(PRODUCT_ID);
+    expect(second).toEqual({ status: "pending", analysisId: "analysis_cleanupfixture02" });
+    expect(orchestrator.getAnalysisStatus(first.analysisId)).toEqual({
+      status: "unavailable",
+      reason: "analysis_not_found",
+    });
+    expect(collect).toHaveBeenCalledTimes(2);
+    if (second.status === "pending") await orchestrator.waitForSettled(second.analysisId);
+  });
+
   it.each([
     ["search degradation", collection({ searchStatus: "unavailable", signals: liveSignals().filter((s) => s.source === "reviews") })],
     ["aggregate identity inconclusive", collection({ reviewStatus: "unavailable", signals: liveSignals().filter((s) => s.source === "searchWeb") })],

@@ -110,6 +110,14 @@ interface ProductAnalysisViewProps {
 function safeReasonText(reason: ProductAnalysisSafeReason): string {
   if (reason === "product_not_supported") return "This product is not enabled for controlled analysis.";
   if (reason === "evidence_unavailable") return "Qualified live evidence is unavailable right now.";
+  if (reason === "analysis_disabled") return "Analysis is temporarily disabled by the operator.";
+  if (reason === "process_paid_operation_ceiling_exhausted") {
+    return "The private-alpha analysis limit has been reached. No provider work was started.";
+  }
+  if (reason === "analysis_deadline_exceeded") {
+    return "The server analysis window ended without a safe result. No second analysis was started.";
+  }
+  if (reason === "runtime_not_ready") return "Analysis is temporarily unavailable while the service is not ready.";
   return "The analysis could not be completed safely.";
 }
 

@@ -71,6 +71,18 @@ describe("ProductAnalysisScreen", () => {
     for (const html of [unavailable, error, deadline]) expect(html).toContain("Retry");
   });
 
+  it.each([
+    ["analysis_disabled", "temporarily disabled by the operator"],
+    ["process_paid_operation_ceiling_exhausted", "private-alpha analysis limit has been reached"],
+    ["analysis_deadline_exceeded", "server analysis window ended"],
+    ["runtime_not_ready", "service is not ready"],
+  ] as const)("renders the safe runtime reason %s truthfully", (reason, expectedText) => {
+    const html = renderState({ phase: "unavailable", reason });
+    expect(html).toContain(expectedText);
+    expect(html).toContain("Retry");
+    expect(html).not.toMatch(/credential|authorization|provider task|stack trace/i);
+  });
+
   it("has deterministic analyze, response, deadline, and retry transitions", () => {
     expect(productAnalysisUiReducer({ phase: "idle" }, { type: "analyze" })).toEqual({ phase: "analyzing" });
     expect(productAnalysisUiReducer({ phase: "analyzing" }, {

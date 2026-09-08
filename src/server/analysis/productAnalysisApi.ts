@@ -3,7 +3,12 @@ import type {
   ProductAnalysisResponse,
 } from "../../app/lib/analysis/productAnalysisContract";
 import { getControlledProductCatalog } from "./controlledProductCatalog";
-import { ProductAnalysisOrchestrator } from "./productAnalysisOrchestrator";
+import type { ProductAnalysisOrchestrator } from "./productAnalysisOrchestrator";
+
+export type ProductAnalysisService = Pick<
+  ProductAnalysisOrchestrator,
+  "analyzeProduct" | "getAnalysisStatus"
+>;
 
 export interface ProductAnalysisApiRequest {
   method: string;
@@ -39,7 +44,7 @@ function validStartBody(body: unknown): body is { productId: string } {
 
 export function handleProductAnalysisApiRequest(
   request: ProductAnalysisApiRequest,
-  orchestrator: ProductAnalysisOrchestrator
+  orchestrator: ProductAnalysisService
 ): ProductAnalysisApiResult {
   if (request.method === "GET" && request.pathname === "/api/product-analysis/catalog") {
     return { statusCode: 200, body: getControlledProductCatalog() };

@@ -13,12 +13,16 @@ export interface ControlledProductCatalogResponse {
 }
 
 export type ProductAnalysisSafeReason =
+  | "analysis_deadline_exceeded"
+  | "analysis_disabled"
   | "analysis_failed"
   | "analysis_not_found"
   | "evidence_unavailable"
   | "invalid_request"
+  | "process_paid_operation_ceiling_exhausted"
   | "product_binding_mismatch"
-  | "product_not_supported";
+  | "product_not_supported"
+  | "runtime_not_ready";
 
 export type ProductAnalysisResponse =
   | { status: "completed"; result: ConsumerProductResult }
@@ -35,12 +39,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 const SAFE_REASONS = new Set<ProductAnalysisSafeReason>([
+  "analysis_deadline_exceeded",
+  "analysis_disabled",
   "analysis_failed",
   "analysis_not_found",
   "evidence_unavailable",
   "invalid_request",
+  "process_paid_operation_ceiling_exhausted",
   "product_binding_mismatch",
   "product_not_supported",
+  "runtime_not_ready",
 ]);
 
 const CATALOG_RESPONSE_KEYS = ["products", "version"];
