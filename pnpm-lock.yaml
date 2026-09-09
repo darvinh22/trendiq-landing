@@ -3,7 +3,8 @@ lockfileVersion: '9.0'
 settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
-
+overrides:
+  vite: 6.3.5
 importers:
 
   .:
