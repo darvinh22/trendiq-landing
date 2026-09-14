@@ -91,10 +91,12 @@ describe("SanitizedAlphaLogger", () => {
       signal: "search_momentum_trends",
       executionStatus: "failed",
       blockReason: "adapter_failed",
+      failureCategory: "provider_http_error",
       emittedSignalCount: 0,
       warningCount: 1,
       credentials: "credential-marker",
       authorization: "authorization-marker",
+      headers: { Authorization: "authorization-header-marker" },
       rawRequestPayload: "payload-marker",
       rawProviderResponse: "response-marker",
       aliases: ["alias-marker"],
@@ -104,6 +106,10 @@ describe("SanitizedAlphaLogger", () => {
       seller: "seller-marker",
       sourceDomain: "source-domain-marker",
       metadata: { uncontrolled: "metadata-marker" },
+      httpStatus: 599,
+      providerStatusCode: 59999,
+      providerMessage: "provider-message-marker",
+      providerDiagnostics: { message: "provider-diagnostics-marker", httpStatus: 598 },
       warnings: ["warning-text-marker"],
       signals: [{ raw: "signal-marker" }],
     } as unknown as AlphaLogEvent;
@@ -116,12 +122,14 @@ describe("SanitizedAlphaLogger", () => {
       signal: "search_momentum_trends",
       executionStatus: "failed",
       blockReason: "adapter_failed",
+      failureCategory: "provider_http_error",
       emittedSignalCount: 0,
       warningCount: 1,
     });
     for (const marker of [
       "credential-marker",
       "authorization-marker",
+      "authorization-header-marker",
       "payload-marker",
       "response-marker",
       "alias-marker",
@@ -131,11 +139,15 @@ describe("SanitizedAlphaLogger", () => {
       "seller-marker",
       "source-domain-marker",
       "metadata-marker",
+      "provider-message-marker",
+      "provider-diagnostics-marker",
       "warning-text-marker",
       "signal-marker",
     ]) {
       expect(serialized).not.toContain(marker);
     }
+    expect(serialized).not.toContain("599");
+    expect(serialized).not.toContain("598");
   });
 
   it("omits unsafe block reasons and drops diagnostics with uncontrolled identity enums", () => {
@@ -148,6 +160,7 @@ describe("SanitizedAlphaLogger", () => {
       signal: "search_volume_google_ads",
       executionStatus: "failed",
       blockReason: "provider-task-id-123",
+      failureCategory: "forged-provider-category",
       emittedSignalCount: 0,
       warningCount: 1,
     } as unknown as AlphaLogEvent);
@@ -162,6 +175,7 @@ describe("SanitizedAlphaLogger", () => {
       warningCount: 1,
     });
     expect(serialized).not.toContain("provider-task-id-123");
+    expect(serialized).not.toContain("forged-provider-category");
 
     logger.log({
       event: "provider_execution",
@@ -173,6 +187,32 @@ describe("SanitizedAlphaLogger", () => {
     } as unknown as AlphaLogEvent);
 
     expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it("omits a category unless it describes a failed adapter execution", () => {
+    const write = vi.fn();
+    const logger = new SanitizedAlphaLogger(write);
+
+    logger.log({
+      event: "provider_execution",
+      provider: "dataforseo_trends",
+      signal: "search_momentum_trends",
+      executionStatus: "failed",
+      blockReason: "operation_safety_violation",
+      failureCategory: "provider_http_error",
+      emittedSignalCount: 0,
+      warningCount: 1,
+    });
+
+    expect(JSON.parse(write.mock.calls[0][0])).toEqual({
+      event: "provider_execution",
+      provider: "dataforseo_trends",
+      signal: "search_momentum_trends",
+      executionStatus: "failed",
+      blockReason: "operation_safety_violation",
+      emittedSignalCount: 0,
+      warningCount: 1,
+    });
   });
 
   it("never changes application behavior when the log writer fails", () => {

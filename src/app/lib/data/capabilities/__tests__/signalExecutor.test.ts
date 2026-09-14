@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   ControlledSignalExecutor,
   InMemorySignalExecutionStateStore,
+  ProviderExecutionError,
   buildSignalExecutionPlan,
   executeApprovedSignal,
   resolveProductQuery,
@@ -565,8 +566,66 @@ describe("controlled signal execution", () => {
 
     expect(result.status).toBe("failed");
     expect(result.blockReason).toBe("adapter_failed");
+    expect(result.failureCategory).toBeUndefined();
     expect(result.operationCount).toBe(1);
     expect(result.paidLiveOperationsPerformed).toBe(0);
+    expect(throwingAdapter.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("propagates an allowlisted category only from the internal provider error type", async () => {
+    const plan = await garminPlan();
+    const selectedStep = step(plan, "dataforseo_google_ads", "search");
+    const throwingAdapter = adapter(selectedStep, {
+      execute: vi.fn(async () => {
+        throw new ProviderExecutionError("internal-only-message", "provider_http_error");
+      }),
+    });
+
+    const result = await executeApprovedSignal({
+      plan,
+      step: selectedStep,
+      approval: approval(plan, selectedStep),
+      adapter: throwingAdapter,
+      stateStore: new InMemorySignalExecutionStateStore(),
+      now: () => now,
+    });
+
+    expect(result).toMatchObject({
+      status: "failed",
+      blockReason: "adapter_failed",
+      failureCategory: "provider_http_error",
+    });
+    expect(JSON.stringify(result)).not.toContain("internal-only-message");
+    expect(throwingAdapter.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops forged categories even when attached to the internal provider error type", async () => {
+    const plan = await garminPlan();
+    const selectedStep = step(plan, "dataforseo_google_ads", "search");
+    const forgedError = new ProviderExecutionError(
+      "uncontrolled-provider-message",
+      "forged-provider-category" as never
+    );
+    const throwingAdapter = adapter(selectedStep, {
+      execute: vi.fn(async () => {
+        throw forgedError;
+      }),
+    });
+
+    const result = await executeApprovedSignal({
+      plan,
+      step: selectedStep,
+      approval: approval(plan, selectedStep),
+      adapter: throwingAdapter,
+      stateStore: new InMemorySignalExecutionStateStore(),
+      now: () => now,
+    });
+
+    expect(result.status).toBe("failed");
+    expect(result.blockReason).toBe("adapter_failed");
+    expect(result.failureCategory).toBeUndefined();
+    expect(JSON.stringify(result)).not.toContain("uncontrolled-provider-message");
+    expect(JSON.stringify(result)).not.toContain("forged-provider-category");
     expect(throwingAdapter.execute).toHaveBeenCalledTimes(1);
   });
 

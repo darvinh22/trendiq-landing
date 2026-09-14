@@ -120,6 +120,24 @@ export type SignalExecutionBlockReason =
   | "blocked_by_provider_policy"
   | "unsupported_capability"
   | "adapter_failed";
+export type ProviderFailureCategory =
+  | "provider_http_error"
+  | "provider_status_error"
+  | "provider_response_shape_error"
+  | "provider_timeout"
+  | "provider_configuration_error"
+  | "provider_network_error";
+
+export class ProviderExecutionError extends Error {
+  constructor(
+    message: string,
+    readonly failureCategory: ProviderFailureCategory
+  ) {
+    super(message);
+    this.name = "ProviderExecutionError";
+  }
+}
+
 export type SignalExecutionIdentityMode = "query" | "product_family" | "provider_ids";
 export type SignalExecutionCacheStatus =
   | ProductResolutionCacheStatus
@@ -366,6 +384,7 @@ export interface SignalExecutionResult {
   signal: TrendIQPlannedSignal;
   status: SignalExecutionStatus;
   blockReason?: SignalExecutionBlockReason;
+  failureCategory?: ProviderFailureCategory;
   canonicalProduct: string;
   query: string;
   provenance: {

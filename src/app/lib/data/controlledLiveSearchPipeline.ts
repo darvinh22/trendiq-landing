@@ -48,6 +48,7 @@ export interface ControlledProviderExecutionDiagnostic {
   signal: SignalExecutionResult["signal"];
   executionStatus: SignalExecutionResult["status"];
   blockReason?: SignalExecutionResult["blockReason"];
+  failureCategory?: SignalExecutionResult["failureCategory"];
   emittedSignalCount: number;
   warningCount: number;
 }
@@ -122,6 +123,7 @@ function publishExecutionDiagnostic(
       signal: result.signal,
       executionStatus: result.status,
       ...(result.blockReason ? { blockReason: result.blockReason } : {}),
+      ...(result.failureCategory ? { failureCategory: result.failureCategory } : {}),
       emittedSignalCount: result.signals.length,
       warningCount: result.warnings.length,
     });

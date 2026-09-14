@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   DATAFORSEO_GOOGLE_ADS_SEARCH_VOLUME_PATH,
   DATAFORSEO_TRENDS_EXPLORE_PATH,
@@ -253,6 +253,7 @@ describe("DataForSeoTrendsClient", () => {
     }
 
     expect(caught).toBeInstanceOf(SearchProviderError);
+    expect(caught?.failureCategory).toBe("provider_http_error");
     expect(caught?.status).toBe(500);
     expect(caught?.message).toContain("HTTP 500");
     expect(caught?.diagnostics).toEqual({
@@ -319,6 +320,7 @@ describe("DataForSeoTrendsClient", () => {
     }
 
     expect(caught).toBeInstanceOf(SearchProviderError);
+    expect(caught?.failureCategory).toBe("provider_http_error");
     expect(caught?.diagnostics?.responseBodyParsed).toBe(false);
     expect(JSON.stringify(caught?.diagnostics)).not.toContain("<html>");
   });
@@ -358,6 +360,7 @@ describe("DataForSeoTrendsClient", () => {
     }
 
     expect(caught).toBeInstanceOf(SearchProviderError);
+    expect(caught?.failureCategory).toBe("provider_status_error");
     expect(caught?.status).toBe(40000);
     expect(caught?.diagnostics?.endpoint).toBe(`https://api.dataforseo.com${DATAFORSEO_TRENDS_EXPLORE_PATH}`);
     expect(caught?.diagnostics?.httpStatus).toBe(200);
@@ -368,6 +371,73 @@ describe("DataForSeoTrendsClient", () => {
     });
     expect(caught?.diagnostics?.requestPayload?.[0].tag).toBe("trendiq:ray-ban-meta:search-interest");
     expect(JSON.stringify(caught?.diagnostics)).not.toContain("sensitive-password");
+  });
+
+  it("classifies an explicit DataForSEO task status rejection without using its message", () => {
+    expect(() => mapDataForSeoTrendsResponse({
+      response: {
+        status_code: 20000,
+        status_message: "Ok.",
+        tasks: [{ status_code: 40101, status_message: "uncontrolled-provider-message" }],
+      },
+      productId: "ray-ban-meta",
+      aliases: ["Ray-Ban Meta"],
+      locationCode: 2840,
+      interestType: "web",
+      timeRange: "past_30_days",
+      fetchedAt: "2026-08-12T00:00:00.000Z",
+    })).toThrow(expect.objectContaining({
+      failureCategory: "provider_status_error",
+    }));
+  });
+
+  it("classifies malformed successful JSON as a response-shape error", async () => {
+    const fetchImpl: FetchLike = async () => ({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new SyntaxError("uncontrolled-response-marker");
+      },
+      text: async () => "uncontrolled-response-marker",
+    });
+    const config = readSearchProviderConfig({}, {
+      mode: "live",
+      apiLogin: "login",
+      apiPassword: "password",
+      apiBaseUrl: "https://api.dataforseo.com",
+    });
+    const client = new DataForSeoTrendsClient(config, fetchImpl);
+
+    await expect(client.getSearchInterest({
+      productId: "ray-ban-meta",
+      aliases: ["Ray-Ban Meta"],
+      locationCode: 2840,
+      interestType: "web",
+      timeRange: "past_30_days",
+    })).rejects.toMatchObject({
+      failureCategory: "provider_response_shape_error",
+      diagnostics: { responseBodyParsed: false },
+    });
+  });
+
+  it("classifies missing provider credentials before making a request", async () => {
+    const fetchImpl = vi.fn(async () => response(fixtureResponse())) as unknown as FetchLike;
+    const config = readSearchProviderConfig({}, {
+      mode: "live",
+      apiLogin: "",
+      apiPassword: "",
+      apiBaseUrl: "https://api.dataforseo.com",
+    });
+    const client = new DataForSeoTrendsClient(config, fetchImpl);
+
+    await expect(client.getSearchInterest({
+      productId: "ray-ban-meta",
+      aliases: ["Ray-Ban Meta"],
+      locationCode: 2840,
+      interestType: "web",
+      timeRange: "past_30_days",
+    })).rejects.toMatchObject({ failureCategory: "provider_configuration_error" });
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });
 
@@ -441,7 +511,7 @@ describe("DataForSeoGoogleAdsSearchVolumeClient", () => {
     ]);
   });
 
-  it("rejects Google Ads Search Volume responses without usable volume", () => {
+  it("classifies Google Ads responses without usable volume as response-shape errors", () => {
     expect(() => mapDataForSeoGoogleAdsSearchVolumeResponse({
       response: {
         ...volumeFixtureResponse(),
@@ -463,6 +533,9 @@ describe("DataForSeoGoogleAdsSearchVolumeClient", () => {
       locationCode: 2840,
       languageCode: "en",
       fetchedAt: "2026-08-12T00:00:00.000Z",
-    })).toThrow("usable monthly search volume");
+    })).toThrow(expect.objectContaining({
+      message: expect.stringContaining("usable monthly search volume"),
+      failureCategory: "provider_response_shape_error",
+    }));
   });
 });

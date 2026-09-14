@@ -1,4 +1,5 @@
 import type { FetchLike } from "../../app/lib/data/search/client";
+import { ProviderExecutionError } from "../../app/lib/data/capabilities/types";
 import type { ProcessPaidOperationGuard } from "../runtime/processPaidOperationGuard";
 
 export const CONTROLLED_MAX_HTTP_REQUESTS = 10;
@@ -78,9 +79,15 @@ export class ProviderRequestBudget {
       return await Promise.race([
         this.fetchImpl(url, init),
         new Promise<never>((_resolve, reject) => {
-          timeoutId = setTimeout(() => reject(new Error("controlled_provider_request_timeout")), this.requestTimeoutMs);
+          timeoutId = setTimeout(() => reject(new ProviderExecutionError(
+            "controlled_provider_request_timeout",
+            "provider_timeout"
+          )), this.requestTimeoutMs);
         }),
       ]);
+    } catch (error) {
+      if (error instanceof ProviderExecutionError) throw error;
+      throw new ProviderExecutionError("controlled_provider_network_error", "provider_network_error");
     } finally {
       if (timeoutId) clearTimeout(timeoutId);
     }

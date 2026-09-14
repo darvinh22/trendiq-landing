@@ -84,6 +84,7 @@ describe("ProductionAnalysisEvidenceCollector provider diagnostics", () => {
         signal: "search_momentum_trends",
         executionStatus: "failed",
         blockReason: "adapter_failed",
+        failureCategory: "provider_http_error",
         emittedSignalCount: 0,
         warningCount: 1,
       },

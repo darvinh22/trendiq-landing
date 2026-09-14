@@ -8,6 +8,8 @@ import type {
   SearchVolumeSeries,
 } from "./types";
 import type { SearchProviderConfig } from "./types";
+import { ProviderExecutionError } from "../capabilities/types";
+import type { ProviderFailureCategory } from "../capabilities/types";
 
 export const DATAFORSEO_TRENDS_EXPLORE_PATH = "/v3/keywords_data/dataforseo_trends/explore/live";
 export const DATAFORSEO_GOOGLE_ADS_SEARCH_VOLUME_PATH = "/v3/keywords_data/google_ads/search_volume/live";
@@ -111,13 +113,14 @@ export interface DataForSeoErrorDiagnostics {
   responseBodyParsed?: boolean;
 }
 
-export class SearchProviderError extends Error {
+export class SearchProviderError extends ProviderExecutionError {
   constructor(
     message: string,
+    failureCategory: ProviderFailureCategory,
     readonly status?: number,
     readonly diagnostics?: DataForSeoErrorDiagnostics
   ) {
-    super(message);
+    super(message, failureCategory);
     this.name = "SearchProviderError";
   }
 }
@@ -128,7 +131,10 @@ function getFetch(fetchImpl?: FetchLike): FetchLike {
   if (fetchImpl) return fetchImpl;
   if (runtimeFetch) return runtimeFetch;
 
-  throw new SearchProviderError("No fetch implementation is available for search provider requests");
+  throw new SearchProviderError(
+    "No fetch implementation is available for search provider requests",
+    "provider_configuration_error"
+  );
 }
 
 function encodeBasicAuth(login: string, password: string): string {
@@ -141,7 +147,10 @@ function encodeBasicAuth(login: string, password: string): string {
   if (browserBtoa) return browserBtoa(raw);
   if (nodeBuffer) return nodeBuffer.from(raw).toString("base64");
 
-  throw new SearchProviderError("No base64 encoder is available for DataForSEO authentication");
+  throw new SearchProviderError(
+    "No base64 encoder is available for DataForSEO authentication",
+    "provider_configuration_error"
+  );
 }
 
 function asDataForSeoResponse<TResult = unknown>(value: unknown): DataForSeoResponse<TResult> {
@@ -226,6 +235,7 @@ function findGraph(response: DataForSeoResponse): {
   if (response.status_code !== 20000) {
     throw new SearchProviderError(
       response.status_message ?? "DataForSEO request failed",
+      "provider_status_error",
       response.status_code,
       buildDataForSeoDiagnostics({ response, responseBodyParsed: true })
     );
@@ -234,11 +244,27 @@ function findGraph(response: DataForSeoResponse): {
   const task = response.tasks?.find((candidate) => candidate.status_code === 20000) as
     | DataForSeoTask<DataForSeoTrendResult>
     | undefined;
+  if (!task) {
+    const failedTask = response.tasks?.find((candidate) =>
+      candidate.status_code !== undefined && candidate.status_code !== 20000
+    );
+    if (failedTask) {
+      throw new SearchProviderError(
+        failedTask.status_message ?? "DataForSEO task failed",
+        "provider_status_error",
+        failedTask.status_code,
+        buildDataForSeoDiagnostics({ response, responseBodyParsed: true })
+      );
+    }
+  }
   const result = task?.result?.[0];
   const item = result?.items?.find((candidate) => candidate.type === "dataforseo_trends_graph");
 
   if (!task || !result || !item) {
-    throw new SearchProviderError("DataForSEO response did not include a trends graph");
+    throw new SearchProviderError(
+      "DataForSEO response did not include a trends graph",
+      "provider_response_shape_error"
+    );
   }
 
   return { task, result, item };
@@ -285,6 +311,7 @@ function findSearchVolumeTask(
   if (response.status_code !== 20000) {
     throw new SearchProviderError(
       response.status_message ?? "DataForSEO request failed",
+      "provider_status_error",
       response.status_code,
       buildDataForSeoDiagnostics({ response, responseBodyParsed: true })
     );
@@ -292,8 +319,25 @@ function findSearchVolumeTask(
 
   const task = response.tasks?.find((candidate) => candidate.status_code === 20000);
 
+  if (!task) {
+    const failedTask = response.tasks?.find((candidate) =>
+      candidate.status_code !== undefined && candidate.status_code !== 20000
+    );
+    if (failedTask) {
+      throw new SearchProviderError(
+        failedTask.status_message ?? "DataForSEO task failed",
+        "provider_status_error",
+        failedTask.status_code,
+        buildDataForSeoDiagnostics({ response, responseBodyParsed: true })
+      );
+    }
+  }
+
   if (!task?.result?.length) {
-    throw new SearchProviderError("DataForSEO response did not include Google Ads search volume results");
+    throw new SearchProviderError(
+      "DataForSEO response did not include Google Ads search volume results",
+      "provider_response_shape_error"
+    );
   }
 
   return task;
@@ -337,7 +381,10 @@ export function mapDataForSeoGoogleAdsSearchVolumeResponse(input: {
     .filter((item) => item.monthlySearchVolume >= 0);
 
   if (!observations.length) {
-    throw new SearchProviderError("DataForSEO response did not include usable monthly search volume");
+    throw new SearchProviderError(
+      "DataForSEO response did not include usable monthly search volume",
+      "provider_response_shape_error"
+    );
   }
 
   return {
@@ -372,7 +419,10 @@ export class DataForSeoTrendsClient implements SearchInterestClient {
     timeRange: SearchInterestTimeRange;
   }): Promise<SearchInterestSeries> {
     if (!this.config.apiLogin || !this.config.apiPassword) {
-      throw new SearchProviderError("DataForSEO credentials are missing");
+      throw new SearchProviderError(
+        "DataForSEO credentials are missing",
+        "provider_configuration_error"
+      );
     }
 
     const endpoint = `${this.config.apiBaseUrl}${DATAFORSEO_TRENDS_EXPLORE_PATH}`;
@@ -400,12 +450,28 @@ export class DataForSeoTrendsClient implements SearchInterestClient {
 
       throw new SearchProviderError(
         createDataForSeoErrorMessage(response.status, diagnostics),
+        "provider_http_error",
         response.status,
         diagnostics
       );
     }
 
-    const parsedResponse = await response.json();
+    let parsedResponse: unknown;
+    try {
+      parsedResponse = await response.json();
+    } catch {
+      throw new SearchProviderError(
+        "DataForSEO response JSON could not be parsed",
+        "provider_response_shape_error",
+        response.status,
+        buildDataForSeoDiagnostics({
+          endpoint,
+          httpStatus: response.status,
+          requestPayload,
+          responseBodyParsed: false,
+        })
+      );
+    }
 
     try {
       return mapDataForSeoTrendsResponse({
@@ -419,7 +485,7 @@ export class DataForSeoTrendsClient implements SearchInterestClient {
       });
     } catch (error) {
       if (error instanceof SearchProviderError) {
-        throw new SearchProviderError(error.message, error.status, {
+        throw new SearchProviderError(error.message, error.failureCategory, error.status, {
           ...error.diagnostics,
           endpoint,
           httpStatus: response.status,
@@ -450,7 +516,10 @@ export class DataForSeoGoogleAdsSearchVolumeClient implements SearchVolumeClient
     languageCode: string;
   }): Promise<SearchVolumeSeries> {
     if (!this.config.apiLogin || !this.config.apiPassword) {
-      throw new SearchProviderError("DataForSEO credentials are missing");
+      throw new SearchProviderError(
+        "DataForSEO credentials are missing",
+        "provider_configuration_error"
+      );
     }
 
     const endpoint = `${this.config.apiBaseUrl}${DATAFORSEO_GOOGLE_ADS_SEARCH_VOLUME_PATH}`;
@@ -478,12 +547,28 @@ export class DataForSeoGoogleAdsSearchVolumeClient implements SearchVolumeClient
 
       throw new SearchProviderError(
         createDataForSeoErrorMessage(response.status, diagnostics),
+        "provider_http_error",
         response.status,
         diagnostics
       );
     }
 
-    const parsedResponse = await response.json();
+    let parsedResponse: unknown;
+    try {
+      parsedResponse = await response.json();
+    } catch {
+      throw new SearchProviderError(
+        "DataForSEO response JSON could not be parsed",
+        "provider_response_shape_error",
+        response.status,
+        buildDataForSeoDiagnostics({
+          endpoint,
+          httpStatus: response.status,
+          requestPayload,
+          responseBodyParsed: false,
+        })
+      );
+    }
 
     try {
       return mapDataForSeoGoogleAdsSearchVolumeResponse({
@@ -497,7 +582,7 @@ export class DataForSeoGoogleAdsSearchVolumeClient implements SearchVolumeClient
       });
     } catch (error) {
       if (error instanceof SearchProviderError) {
-        throw new SearchProviderError(error.message, error.status, {
+        throw new SearchProviderError(error.message, error.failureCategory, error.status, {
           ...error.diagnostics,
           endpoint,
           httpStatus: response.status,

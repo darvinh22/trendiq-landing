@@ -107,7 +107,24 @@ describe("ProviderRequestBudget", () => {
     const fetchImpl = vi.fn(() => new Promise<never>(() => undefined)) as unknown as FetchLike;
     const budget = new ProviderRequestBudget(fetchImpl, 10, 4, 5);
     await expect(budget.fetch("https://provider.invalid/live/a", { method: "GET" }))
-      .rejects.toThrow("controlled_provider_request_timeout");
+      .rejects.toMatchObject({
+        message: "controlled_provider_request_timeout",
+        failureCategory: "provider_timeout",
+      });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("classifies a controlled fetch rejection as a network error", async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new TypeError("uncontrolled-network-message");
+    }) as unknown as FetchLike;
+    const budget = new ProviderRequestBudget(fetchImpl);
+
+    await expect(budget.fetch("https://provider.invalid/live/a", { method: "GET" }))
+      .rejects.toMatchObject({
+        message: "controlled_provider_network_error",
+        failureCategory: "provider_network_error",
+      });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 });

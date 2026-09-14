@@ -1,6 +1,7 @@
 import type { ProductAnalysisSafeReason } from "../../app/lib/analysis/productAnalysisContract";
 import type {
   LiveProviderId,
+  ProviderFailureCategory,
   SignalExecutionBlockReason,
   SignalExecutionStatus,
   TrendIQPlannedSignal,
@@ -40,6 +41,7 @@ export type AlphaLogEvent =
       signal: TrendIQPlannedSignal;
       executionStatus: SignalExecutionStatus;
       blockReason?: SignalExecutionBlockReason;
+      failureCategory?: ProviderFailureCategory;
       emittedSignalCount: number;
       warningCount: number;
     };
@@ -105,6 +107,15 @@ const SAFE_BLOCK_REASONS = new Set<SignalExecutionBlockReason>([
   "adapter_failed",
 ]);
 
+const SAFE_PROVIDER_FAILURE_CATEGORIES = new Set<ProviderFailureCategory>([
+  "provider_http_error",
+  "provider_status_error",
+  "provider_response_shape_error",
+  "provider_timeout",
+  "provider_configuration_error",
+  "provider_network_error",
+]);
+
 function safeCount(value: number): number {
   return Number.isSafeInteger(value) && value >= 0 ? value : 0;
 }
@@ -127,6 +138,12 @@ function safeExecutionStatus(value: SignalExecutionStatus): SignalExecutionStatu
 
 function safeBlockReason(value: SignalExecutionBlockReason | undefined): SignalExecutionBlockReason | undefined {
   return value && SAFE_BLOCK_REASONS.has(value) ? value : undefined;
+}
+
+function safeProviderFailureCategory(
+  value: ProviderFailureCategory | undefined
+): ProviderFailureCategory | undefined {
+  return value && SAFE_PROVIDER_FAILURE_CATEGORIES.has(value) ? value : undefined;
 }
 
 function projectSafeEvent(event: AlphaLogEvent): Record<string, unknown> | null {
@@ -178,12 +195,16 @@ function projectSafeEvent(event: AlphaLogEvent): Record<string, unknown> | null 
     const blockReason = executionStatus === "completed"
       ? undefined
       : safeBlockReason(event.blockReason);
+    const failureCategory = executionStatus === "failed" && blockReason === "adapter_failed"
+      ? safeProviderFailureCategory(event.failureCategory)
+      : undefined;
     return {
       event: "provider_execution",
       provider,
       signal,
       executionStatus,
       ...(blockReason ? { blockReason } : {}),
+      ...(failureCategory ? { failureCategory } : {}),
       emittedSignalCount: safeCount(event.emittedSignalCount),
       warningCount: safeCount(event.warningCount),
     };

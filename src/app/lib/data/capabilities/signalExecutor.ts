@@ -1,6 +1,8 @@
+import { ProviderExecutionError } from "./types";
 import type {
   FutureExecutionEligibility,
   ProductIdentityConfidence,
+  ProviderFailureCategory,
   ProviderExecutionAdapter,
   SignalExecutionAdapterOutput,
   SignalExecutionApproval,
@@ -62,6 +64,22 @@ const IDENTITY_BLOCK_REASONS: Record<FutureExecutionEligibility, SignalExecution
 
 const FORBIDDEN_METADATA_KEY = /(authorization|auth|password|secret|token|api[_-]?key|credential|header)/i;
 
+const SAFE_PROVIDER_FAILURE_CATEGORIES = new Set<ProviderFailureCategory>([
+  "provider_http_error",
+  "provider_status_error",
+  "provider_response_shape_error",
+  "provider_timeout",
+  "provider_configuration_error",
+  "provider_network_error",
+]);
+
+function safeProviderFailureCategory(error: unknown): ProviderFailureCategory | undefined {
+  if (!(error instanceof ProviderExecutionError)) return undefined;
+  return SAFE_PROVIDER_FAILURE_CATEGORIES.has(error.failureCategory)
+    ? error.failureCategory
+    : undefined;
+}
+
 function confidenceRank(confidence: ProductIdentityConfidence): number {
   const ranks: Record<ProductIdentityConfidence, number> = {
     low: 1,
@@ -97,6 +115,7 @@ function emptyResult(input: {
   executionId?: string;
   status: SignalExecutionResult["status"];
   blockReason?: SignalExecutionBlockReason;
+  failureCategory?: ProviderFailureCategory;
   observedAt: string;
   warnings: string[];
 }): SignalExecutionResult {
@@ -109,6 +128,7 @@ function emptyResult(input: {
     signal: input.step.signal,
     status: input.status,
     blockReason: input.blockReason,
+    ...(input.failureCategory ? { failureCategory: input.failureCategory } : {}),
     canonicalProduct: input.step.canonicalTitle,
     query: input.step.query,
     provenance: {
@@ -548,7 +568,8 @@ export async function executeApprovedSignal(input: ExecuteApprovedSignalInput): 
   let output;
   try {
     output = await adapter.execute({ step, approval });
-  } catch {
+  } catch (error) {
+    const failureCategory = safeProviderFailureCategory(error);
     try {
       await stateStore.setFailed({
         ...startedState,
@@ -563,6 +584,7 @@ export async function executeApprovedSignal(input: ExecuteApprovedSignalInput): 
           executionId: approval.executionId,
           status: "failed",
           blockReason: "adapter_failed",
+          failureCategory,
           observedAt: now.toISOString(),
           warnings: [
             "Adapter execution failed; no automatic retry was attempted.",
@@ -580,6 +602,7 @@ export async function executeApprovedSignal(input: ExecuteApprovedSignalInput): 
         executionId: approval.executionId,
         status: "failed",
         blockReason: "adapter_failed",
+        failureCategory,
         observedAt: now.toISOString(),
         warnings: ["Adapter execution failed; no automatic retry was attempted."],
       }),
