@@ -117,6 +117,7 @@ export function createProductAnalysisRuntime(
   const evidenceCollector = options.evidenceCollector ?? new ProductionAnalysisEvidenceCollector({
     env: config.providerEnvironment,
     fetchImpl: options.fetchImpl,
+    logger,
     processPaidOperationGuard: paidOperationGuard,
   });
   const orchestrator = new ProductAnalysisOrchestrator({

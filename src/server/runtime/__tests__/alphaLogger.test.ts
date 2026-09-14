@@ -82,6 +82,99 @@ describe("SanitizedAlphaLogger", () => {
     }
   });
 
+  it("emits only allowlisted provider-execution fields and count diagnostics", () => {
+    const write = vi.fn();
+    const logger = new SanitizedAlphaLogger(write);
+    const unsafeEvent = {
+      event: "provider_execution",
+      provider: "dataforseo_trends",
+      signal: "search_momentum_trends",
+      executionStatus: "failed",
+      blockReason: "adapter_failed",
+      emittedSignalCount: 0,
+      warningCount: 1,
+      credentials: "credential-marker",
+      authorization: "authorization-marker",
+      rawRequestPayload: "payload-marker",
+      rawProviderResponse: "response-marker",
+      aliases: ["alias-marker"],
+      rawQuery: "query-marker",
+      providerTaskId: "task-marker",
+      providerProductId: "provider-product-marker",
+      seller: "seller-marker",
+      sourceDomain: "source-domain-marker",
+      metadata: { uncontrolled: "metadata-marker" },
+      warnings: ["warning-text-marker"],
+      signals: [{ raw: "signal-marker" }],
+    } as unknown as AlphaLogEvent;
+
+    logger.log(unsafeEvent);
+    const serialized = write.mock.calls[0][0] as string;
+    expect(JSON.parse(serialized)).toEqual({
+      event: "provider_execution",
+      provider: "dataforseo_trends",
+      signal: "search_momentum_trends",
+      executionStatus: "failed",
+      blockReason: "adapter_failed",
+      emittedSignalCount: 0,
+      warningCount: 1,
+    });
+    for (const marker of [
+      "credential-marker",
+      "authorization-marker",
+      "payload-marker",
+      "response-marker",
+      "alias-marker",
+      "query-marker",
+      "task-marker",
+      "provider-product-marker",
+      "seller-marker",
+      "source-domain-marker",
+      "metadata-marker",
+      "warning-text-marker",
+      "signal-marker",
+    ]) {
+      expect(serialized).not.toContain(marker);
+    }
+  });
+
+  it("omits unsafe block reasons and drops diagnostics with uncontrolled identity enums", () => {
+    const write = vi.fn();
+    const logger = new SanitizedAlphaLogger(write);
+
+    logger.log({
+      event: "provider_execution",
+      provider: "dataforseo_google_ads",
+      signal: "search_volume_google_ads",
+      executionStatus: "failed",
+      blockReason: "provider-task-id-123",
+      emittedSignalCount: 0,
+      warningCount: 1,
+    } as unknown as AlphaLogEvent);
+
+    const serialized = write.mock.calls[0][0] as string;
+    expect(JSON.parse(serialized)).toEqual({
+      event: "provider_execution",
+      provider: "dataforseo_google_ads",
+      signal: "search_volume_google_ads",
+      executionStatus: "failed",
+      emittedSignalCount: 0,
+      warningCount: 1,
+    });
+    expect(serialized).not.toContain("provider-task-id-123");
+
+    logger.log({
+      event: "provider_execution",
+      provider: "private-provider.example",
+      signal: "raw-secret-query",
+      executionStatus: "SECRET-response-body",
+      emittedSignalCount: 1,
+      warningCount: 1,
+    } as unknown as AlphaLogEvent);
+
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
   it("never changes application behavior when the log writer fails", () => {
     const logger = new SanitizedAlphaLogger(() => {
       throw new Error("writer failed");

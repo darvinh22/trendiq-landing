@@ -40,6 +40,16 @@ export interface RunControlledLiveSearchToScoreOptions {
   searchVolumeClient?: SearchVolumeClient;
   searchConfig?: SearchProviderConfig;
   now?: () => Date;
+  onExecutionDiagnostic?: (diagnostic: ControlledProviderExecutionDiagnostic) => void;
+}
+
+export interface ControlledProviderExecutionDiagnostic {
+  provider: SignalExecutionResult["provider"];
+  signal: SignalExecutionResult["signal"];
+  executionStatus: SignalExecutionResult["status"];
+  blockReason?: SignalExecutionResult["blockReason"];
+  emittedSignalCount: number;
+  warningCount: number;
 }
 
 export interface ControlledLiveSearchToScoreResult {
@@ -98,6 +108,26 @@ function matchingApproval(
   step: SignalExecutionStep
 ): SignalExecutionApproval | undefined {
   return approvals.find((approval) => approvalMatchesStep(approval, plan, step));
+}
+
+function publishExecutionDiagnostic(
+  callback: RunControlledLiveSearchToScoreOptions["onExecutionDiagnostic"],
+  result: SignalExecutionResult
+): void {
+  if (!callback) return;
+
+  try {
+    callback({
+      provider: result.provider,
+      signal: result.signal,
+      executionStatus: result.status,
+      ...(result.blockReason ? { blockReason: result.blockReason } : {}),
+      emittedSignalCount: result.signals.length,
+      warningCount: result.warnings.length,
+    });
+  } catch {
+    // Diagnostics must never change controlled execution or scoring behavior.
+  }
 }
 
 export function createScopedSignalExecutionApproval(input: {
@@ -178,14 +208,16 @@ export async function runControlledLiveSearchToScore(
       now,
       producedSignals: approvedTrendsSteps.map((step) => step.signal),
     });
-    executionResults.push(await executeApprovedSignal({
+    const executionResult = await executeApprovedSignal({
       plan,
       step: primaryStep,
       approval: primaryApproval,
       adapter,
       stateStore: options.stateStore,
       now,
-    }));
+    });
+    executionResults.push(executionResult);
+    publishExecutionDiagnostic(options.onExecutionDiagnostic, executionResult);
   }
 
   if (googleAdsSearchVolumeStep && googleAdsSearchVolumeApproval) {
@@ -195,14 +227,16 @@ export async function runControlledLiveSearchToScore(
       config: options.searchConfig,
       now,
     });
-    executionResults.push(await executeApprovedSignal({
+    const executionResult = await executeApprovedSignal({
       plan,
       step: googleAdsSearchVolumeStep,
       approval: googleAdsSearchVolumeApproval,
       adapter,
       stateStore: options.stateStore,
       now,
-    }));
+    });
+    executionResults.push(executionResult);
+    publishExecutionDiagnostic(options.onExecutionDiagnostic, executionResult);
   }
 
   const rawSignals = executionResults

@@ -3,6 +3,7 @@ import type { ProductProfile } from "../../app/lib/data/capabilities/types";
 import {
   createScopedSignalExecutionApproval,
   runControlledLiveSearchToScore,
+  type ControlledProviderExecutionDiagnostic,
 } from "../../app/lib/data/controlledLiveSearchPipeline";
 import {
   DataForSeoGoogleShoppingProductsClient,
@@ -20,6 +21,7 @@ import type { NormalizedTrendSignal, TrendSignalProvider } from "../../app/lib/d
 import { ProviderRequestBudget, type ProviderRequestUsage } from "./providerRequestBudget";
 import type { RuntimeEnvironment } from "../runtime/runtimeConfig";
 import type { ProcessPaidOperationGuard } from "../runtime/processPaidOperationGuard";
+import { NOOP_ALPHA_LOGGER, type AlphaLogger } from "../runtime/alphaLogger";
 
 export type EvidencePathStatus = "completed" | "unavailable";
 
@@ -51,6 +53,13 @@ const EMPTY_REVIEW_FALLBACK: TrendSignalProvider = {
   getSignals: () => [],
 };
 
+function logProviderExecution(
+  logger: AlphaLogger,
+  diagnostic: ControlledProviderExecutionDiagnostic
+): void {
+  logger.log({ event: "provider_execution", ...diagnostic });
+}
+
 function runtimeFetch(): FetchLike | undefined {
   const fetchImpl = (globalThis as { fetch?: unknown }).fetch;
   return typeof fetchImpl === "function" ? fetchImpl as FetchLike : undefined;
@@ -60,6 +69,7 @@ export class ProductionAnalysisEvidenceCollector implements AnalysisEvidenceColl
   constructor(private readonly options: {
     env?: RuntimeEnvironment;
     fetchImpl?: FetchLike;
+    logger?: AlphaLogger;
     processPaidOperationGuard?: ProcessPaidOperationGuard;
   } = {}) {}
 
@@ -115,6 +125,8 @@ export class ProductionAnalysisEvidenceCollector implements AnalysisEvidenceColl
           searchClient: new DataForSeoTrendsClient(searchConfig, budget.fetch),
           searchVolumeClient: new DataForSeoGoogleAdsSearchVolumeClient(searchConfig, budget.fetch),
           now,
+          onExecutionDiagnostic: (diagnostic) =>
+            logProviderExecution(this.options.logger ?? NOOP_ALPHA_LOGGER, diagnostic),
           approve: ({ plan, trendsSteps, googleAdsSearchVolumeStep }) => [
             ...trendsSteps,
             ...(googleAdsSearchVolumeStep ? [googleAdsSearchVolumeStep] : []),
