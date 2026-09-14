@@ -96,7 +96,7 @@ Still mocked:
 
 ## Windows
 
-The adapter requests a 60-day Search Interest range and computes:
+The adapter requests the provider's `past_30_days` Search Interest range and computes:
 
 - current 7-day window
 - previous 7-day window

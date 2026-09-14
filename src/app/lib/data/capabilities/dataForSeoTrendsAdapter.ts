@@ -39,11 +39,6 @@ function plannedSignalForNormalizedSignal(
   return undefined;
 }
 
-function aliasesForStep(step: SignalExecutionStep): string[] {
-  const aliases = step.aliases.map((alias) => alias.trim()).filter(Boolean);
-  return aliases.length ? aliases : [step.query];
-}
-
 function producedSignalSet(
   step: SignalExecutionStep,
   producedSignals: readonly TrendIQPlannedSignal[] | undefined
@@ -128,7 +123,7 @@ export function createDataForSeoTrendsExecutionAdapter(
     async execute({ step, approval }) {
       const series = await client.getSearchInterest({
         productId: step.productId,
-        aliases: aliasesForStep(step),
+        aliases: [step.query],
         locationCode: config.locationCode,
         interestType: config.interestType,
         timeRange: config.timeRange,

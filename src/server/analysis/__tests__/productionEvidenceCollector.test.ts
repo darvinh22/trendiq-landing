@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import type { FetchLike } from "../../../app/lib/data/search/client";
+import {
+  DATAFORSEO_GOOGLE_ADS_SEARCH_VOLUME_PATH,
+  DATAFORSEO_TRENDS_EXPLORE_PATH,
+  type FetchLike,
+} from "../../../app/lib/data/search/client";
 import { getControlledProductProfile } from "../controlledProductCatalog";
 import { ProductionAnalysisEvidenceCollector } from "../productionEvidenceCollector";
 import type { AlphaLogEvent } from "../../runtime/alphaLogger";
@@ -32,8 +36,10 @@ describe("ProductionAnalysisEvidenceCollector provider diagnostics", () => {
         }],
       }],
     };
-    const fetchImpl: FetchLike = vi.fn(async (url) =>
-      url.includes("dataforseo_trends")
+    const fetchCalls: Array<{ url: string; init: Parameters<FetchLike>[1] }> = [];
+    const fetchImpl: FetchLike = vi.fn(async (url, init) => {
+      fetchCalls.push({ url, init });
+      return url.includes("dataforseo_trends")
         ? {
             ok: false,
             status: 500,
@@ -45,8 +51,8 @@ describe("ProductionAnalysisEvidenceCollector provider diagnostics", () => {
             status: 200,
             json: async () => zeroSignalResponse,
             text: async () => JSON.stringify(zeroSignalResponse),
-          }
-    );
+          };
+    });
     const log = vi.fn((_event: AlphaLogEvent) => {
       throw new Error("logging failed");
     });
@@ -77,6 +83,42 @@ describe("ProductionAnalysisEvidenceCollector provider diagnostics", () => {
       processPaidOperationRejected: false,
     });
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const trendsCalls = fetchCalls.filter(({ url }) => url.includes("dataforseo_trends"));
+    const googleAdsCalls = fetchCalls.filter(({ url }) => url.includes("google_ads"));
+    expect(trendsCalls).toHaveLength(1);
+    expect(googleAdsCalls).toHaveLength(1);
+
+    const trendsCall = trendsCalls[0];
+    const trendsUrl = new URL(trendsCall.url);
+    expect(trendsCall.url).toBe(`https://api.dataforseo.com${DATAFORSEO_TRENDS_EXPLORE_PATH}`);
+    expect(trendsUrl.search).toBe("");
+    expect(trendsCall.init?.method).toBe("POST");
+    expect(trendsCall.init?.headers?.["Content-Type"]).toBe("application/json");
+
+    const trendsBody = JSON.parse(trendsCall.init?.body ?? "null") as Array<Record<string, unknown>>;
+    expect(trendsBody).toEqual([{
+      keywords: ["Ray-Ban Meta"],
+      location_code: 2840,
+      type: "web",
+      time_range: "past_30_days",
+      tag: "trendiq:ray-ban-meta:search-interest",
+    }]);
+    for (const absentField of [
+      "language_code",
+      "language_name",
+      "item_types",
+      "date_from",
+      "date_to",
+    ]) {
+      expect(trendsBody[0]).not.toHaveProperty(absentField);
+    }
+
+    expect(googleAdsCalls[0].url).toBe(
+      `https://api.dataforseo.com${DATAFORSEO_GOOGLE_ADS_SEARCH_VOLUME_PATH}`
+    );
+    const googleAdsBody = JSON.parse(googleAdsCalls[0].init?.body ?? "null") as Array<Record<string, unknown>>;
+    expect(googleAdsBody).toHaveLength(1);
+    expect(googleAdsBody[0].keywords).toEqual(["Ray-Ban Meta"]);
     expect(log.mock.calls.map(([event]) => event)).toEqual([
       {
         event: "provider_execution",

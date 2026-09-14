@@ -210,6 +210,23 @@ function approvalsFor(
 }
 
 describe("controlled live search-to-score pipeline", () => {
+  it("uses only the exact planned Trends query for a controlled profile with multiple aliases", async () => {
+    const client = new FixtureTrendsClient();
+    const result = await runControlledLiveSearchToScore({
+      query: "Ray-Ban Meta",
+      searchClient: client,
+      searchConfig: searchConfig(),
+      stateStore: new InMemorySignalExecutionStateStore(),
+      now: () => now,
+      approve: ({ plan, trendsSteps }) => approvalsFor(plan, trendsSteps),
+    });
+
+    expect(result.primaryStep.aliases.length).toBeGreaterThan(1);
+    expect(result.primaryStep.query).toBe("Ray-Ban Meta");
+    expect(client.calls).toHaveLength(1);
+    expect(client.calls[0].aliases).toEqual([result.primaryStep.query]);
+  });
+
   it("resolves a never-seen Garmin product and scores controlled DataForSEO Trends search and growth signals", async () => {
     const client = new FixtureTrendsClient();
     const result = await runControlledLiveSearchToScore({
