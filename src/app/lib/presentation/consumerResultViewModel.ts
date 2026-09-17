@@ -352,6 +352,10 @@ function statusLabel(status: ConsumerEvidenceStatus): string {
   return "Not enough evidence";
 }
 
+function recommendationLabel(recommendation: Recommendation): string {
+  return recommendation === "NO_RECOMMENDATION" ? "NO RECOMMENDATION" : recommendation;
+}
+
 function evidenceValue(value: number | null): string {
   return value === null ? "Unavailable" : String(value);
 }
@@ -405,7 +409,7 @@ function unavailableViewModel(productId: string, issue: ConsumerUiIssueCode): Co
     product: { id: productId, name: "Product result unavailable", brand: null, category: null },
     decision: {
       recommendation: "NO_RECOMMENDATION",
-      recommendationLabel: "NO_RECOMMENDATION",
+      recommendationLabel: recommendationLabel("NO_RECOMMENDATION"),
       status: "unavailable",
       statusLabel: statusLabel("unavailable"),
       headline: "Result unavailable",
@@ -524,7 +528,7 @@ export function buildConsumerResultViewModel(input: BuildConsumerResultViewModel
     },
     decision: {
       recommendation: result.decision.recommendation,
-      recommendationLabel: result.decision.recommendation,
+      recommendationLabel: recommendationLabel(result.decision.recommendation),
       status: result.decision.status,
       statusLabel: statusLabel(result.decision.status),
       headline: result.decision.headline,

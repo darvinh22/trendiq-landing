@@ -23,19 +23,24 @@ describe("buildConsumerResultViewModel", () => {
     );
 
     expect(result.decision.recommendation).toBe("WAIT");
+    expect(result.decision.recommendationLabel).toBe("WAIT");
     expect(result.decision.headline).toBe("Current evidence favors waiting");
   });
 
   it("maps SKIP directly", () => {
-    expect(view(createConsumerProductResultFixture({ recommendation: "SKIP" })).decision.recommendation).toBe("SKIP");
+    const result = view(createConsumerProductResultFixture({ recommendation: "SKIP" }));
+
+    expect(result.decision.recommendation).toBe("SKIP");
+    expect(result.decision.recommendationLabel).toBe("SKIP");
   });
 
-  it("maps NO_RECOMMENDATION directly", () => {
+  it("presents NO_RECOMMENDATION without exposing the internal token", () => {
     const result = view(
       createConsumerProductResultFixture({ recommendation: "NO_RECOMMENDATION", status: "unavailable" })
     );
 
     expect(result.decision.recommendation).toBe("NO_RECOMMENDATION");
+    expect(result.decision.recommendationLabel).toBe("NO RECOMMENDATION");
     expect(result.decision.status).toBe("unavailable");
   });
 
@@ -257,7 +262,11 @@ describe("buildConsumerResultViewModel", () => {
   it("fails safely for malformed ConsumerProductResult", () => {
     const result = view({ version: "consumer_product_result_v1" });
 
-    expect(result.decision).toMatchObject({ recommendation: "NO_RECOMMENDATION", status: "unavailable" });
+    expect(result.decision).toMatchObject({
+      recommendation: "NO_RECOMMENDATION",
+      recommendationLabel: "NO RECOMMENDATION",
+      status: "unavailable",
+    });
     expect(result.issues).toEqual(["UI_INPUT_MALFORMED"]);
   });
 
@@ -278,6 +287,7 @@ describe("buildConsumerResultViewModel", () => {
       category: null,
     });
     expect(result.decision.recommendation).toBe("NO_RECOMMENDATION");
+    expect(result.decision.recommendationLabel).toBe("NO RECOMMENDATION");
     expect(result.issues).toEqual(["UI_PRODUCT_BINDING_MISMATCH"]);
   });
 

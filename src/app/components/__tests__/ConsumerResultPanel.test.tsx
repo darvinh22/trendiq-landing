@@ -19,11 +19,19 @@ describe("ConsumerResultPanel", () => {
     expect(html).toContain("Evidence limited");
   });
 
-  it("renders all recommendation directions directly", () => {
-    for (const recommendation of ["BUY", "WAIT", "SKIP", "NO_RECOMMENDATION"] as const) {
-      const status = recommendation === "NO_RECOMMENDATION" ? "unavailable" : "verified";
-      expect(renderPanel(createConsumerProductResultFixture({ recommendation, status }))).toContain(recommendation);
+  it("renders BUY, WAIT, and SKIP unchanged", () => {
+    for (const recommendation of ["BUY", "WAIT", "SKIP"] as const) {
+      expect(renderPanel(createConsumerProductResultFixture({ recommendation }))).toContain(recommendation);
     }
+  });
+
+  it("renders a consumer-safe NO RECOMMENDATION label without the internal token", () => {
+    const html = renderPanel(
+      createConsumerProductResultFixture({ recommendation: "NO_RECOMMENDATION", status: "unavailable" })
+    );
+
+    expect(html).toContain("NO RECOMMENDATION");
+    expect(html).not.toContain("NO_RECOMMENDATION");
   });
 
   it("renders unavailable Score, Confidence, and momentum without numeric defaults", () => {
@@ -134,7 +142,8 @@ describe("ConsumerResultPanel", () => {
   it("fails closed for malformed input", () => {
     const html = renderPanel({ version: "consumer_product_result_v1" });
 
-    expect(html).toContain("NO_RECOMMENDATION");
+    expect(html).toContain("NO RECOMMENDATION");
+    expect(html).not.toContain("NO_RECOMMENDATION");
     expect(html).toContain("Result unavailable");
     expect(html).toContain("Not enough evidence");
   });
@@ -142,7 +151,8 @@ describe("ConsumerResultPanel", () => {
   it("fails closed for a product-binding mismatch", () => {
     const html = renderPanel(createConsumerProductResultFixture(), "fixture-product-b");
 
-    expect(html).toContain("NO_RECOMMENDATION");
+    expect(html).toContain("NO RECOMMENDATION");
+    expect(html).not.toContain("NO_RECOMMENDATION");
     expect(html).not.toContain("Synthetic Fixture Product");
   });
 
