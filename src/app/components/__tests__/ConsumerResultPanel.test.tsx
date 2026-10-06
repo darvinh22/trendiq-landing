@@ -47,7 +47,7 @@ describe("ConsumerResultPanel", () => {
     );
 
     expect(html).toContain("Score unavailable");
-    expect(html).toContain("Confidence unavailable");
+    expect(html).toContain("Signal quality unavailable");
     expect(html).toContain("Momentum unavailable");
   });
 
@@ -108,15 +108,19 @@ describe("ConsumerResultPanel", () => {
 
     expect(html).toContain("68");
     expect(html).toContain("Evidence limited");
-    expect(html).toContain("Live evidence coverage: 62.5%");
+    expect(html).toContain("EVIDENCE COVERAGE");
+    expect(html).toContain("62.5%");
+    expect(html).not.toContain("Live evidence coverage:");
   });
 
-  it("states that Confidence is evidence quality rather than correctness probability", () => {
+  it("states that Signal Quality is the quality of available signals", () => {
     const html = renderPanel(createConsumerProductResultFixture({ confidence: 84 }));
 
-    expect(html).toContain("84 evidence quality");
-    expect(html).toContain("Confidence measures evidence quality");
-    expect(html).toContain("not the probability that the recommendation is correct");
+    expect(html).toContain("SIGNAL QUALITY");
+    expect(html).toContain(">84<");
+    expect(html).toContain("Signal Quality measures the quality of the signals that are available");
+    expect(html).toContain("It is not confidence that the recommendation is correct");
+    expect(html).not.toContain("not the probability that the recommendation is correct");
   });
 
   it("renders the actual missing-evidence list", () => {
@@ -214,11 +218,11 @@ describe("ConsumerResultPanel", () => {
     }));
 
     expect(html).toContain("Evidence incomplete");
-    expect(html).toContain("Evidence limited");
+    expect(html).toContain("Insufficient evidence");
     expect(html).toContain("@container");
     expect(html).toContain('data-metric-grid=""');
     expect(html).toContain("grid-cols-1");
-    expect(html).toContain("@min-[42rem]:grid-cols-3");
+    expect(html).toContain("@min-[42rem]:grid-cols-2");
     expect(html).not.toContain("sm:grid-cols-3");
 
     const chipTags = html.match(/<span\b[^>]*data-evidence-chip=""[^>]*>/g) ?? [];
@@ -233,7 +237,7 @@ describe("ConsumerResultPanel", () => {
     }
 
     const cardTags = html.match(/<section\b[^>]*data-metric-card=""[^>]*>/g) ?? [];
-    expect(cardTags).toHaveLength(3);
+    expect(cardTags).toHaveLength(4);
     for (const tag of cardTags) {
       expect(tag).toContain("min-w-0");
       expect(tag).not.toMatch(/\babsolute\b|\bfixed\b|overflow-hidden/);

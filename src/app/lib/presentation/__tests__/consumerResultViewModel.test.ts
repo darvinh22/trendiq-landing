@@ -94,11 +94,20 @@ describe("buildConsumerResultViewModel", () => {
     expect(result.score.valueLabel).toBe("Score unavailable");
   });
 
-  it("preserves Confidence as evidence quality", () => {
+  it("preserves the numeric score as Signal Quality", () => {
     const result = view(createConsumerProductResultFixture({ confidence: 90 }));
 
     expect(result.confidence.meaning).toBe("evidence_quality_not_correctness_probability");
-    expect(result.confidence.valueLabel).toBe("90 evidence quality");
+    expect(result.confidence.metricLabel).toBe("Signal Quality");
+    expect(result.confidence.value).toBe(90);
+    expect(result.confidence.valueLabel).toBe("90");
+    expect(result.confidence.level).toBe("High");
+    expect(result.confidence.qualitativeLabel).toBe("High");
+    expect(result.evidenceCoverage).toMatchObject({
+      percent: 100,
+      label: "100%",
+      source: "liveCoveragePercent",
+    });
   });
 
   it("never describes Confidence as correctness probability", () => {

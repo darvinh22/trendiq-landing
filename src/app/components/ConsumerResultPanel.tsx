@@ -1,6 +1,7 @@
 import type { ConsumerProductResult } from "../lib/data/consumerResult";
 import type { ConsumerEvidenceStatus } from "../lib/data/consumerResult";
 import { buildConsumerResultViewModel } from "../lib/presentation/consumerResultViewModel";
+import { qualitativeChipStatus } from "../lib/presentation/signalQualityPresentation";
 
 type Recommendation = ConsumerProductResult["decision"]["recommendation"];
 
@@ -54,6 +55,7 @@ function MetricCard({
   statusLabel,
   explanation,
   context,
+  marker,
 }: {
   label: string;
   value: string;
@@ -61,10 +63,12 @@ function MetricCard({
   statusLabel: string;
   explanation: string;
   context?: string;
+  marker?: string;
 }) {
   return (
     <section
       data-metric-card=""
+      {...(marker ? { [`data-${marker}`]: "" } : {})}
       className="min-w-0 rounded-xl p-3"
       style={{ background: "rgba(255,255,255,0.03)", border: "1px solid var(--border)" }}
       aria-label={label}
@@ -94,13 +98,6 @@ export function ConsumerResultPanel({ consumerResult, productId }: ConsumerResul
   const withholdPartialScore =
     scoreInputIsIncomplete(consumerResult) ||
     (view.decision.recommendation === "NO_RECOMMENDATION" && view.score.value !== null);
-  const showLiveCoverage =
-    !withholdPartialScore &&
-    view.score.liveCoveragePercent !== null &&
-    (view.score.status === "degraded" || view.score.liveCoveragePercent < 100);
-  const scoreCoverageContext = showLiveCoverage
-    ? `Live evidence coverage: ${view.score.liveCoveragePercent}%`
-    : undefined;
   const scoreExplanation = withholdPartialScore
     ? view.decision.recommendation === "NO_RECOMMENDATION"
       ? "Evidence is incomplete, so a recommendation cannot safely be made."
@@ -148,24 +145,33 @@ export function ConsumerResultPanel({ consumerResult, productId }: ConsumerResul
         </p>
       </section>
 
-      <div data-metric-grid="" className="grid min-w-0 grid-cols-1 gap-3 @min-[42rem]:grid-cols-3">
+      <div data-metric-grid="" className="grid min-w-0 grid-cols-1 gap-3 @min-[42rem]:grid-cols-2">
         <MetricCard
+          marker="trendiq-score"
           label="TrendIQ Score"
           value={withholdPartialScore ? "Evidence incomplete" : view.score.valueLabel}
           status={withholdPartialScore ? "unavailable" : view.score.status}
           statusLabel={withholdPartialScore ? "Evidence incomplete" : view.score.statusLabel}
           explanation={scoreExplanation}
-          context={scoreCoverageContext}
         />
         <MetricCard
-          label="Evidence Confidence"
+          marker="signal-quality"
+          label={view.confidence.metricLabel}
           value={view.confidence.valueLabel}
-          status={view.confidence.status}
-          statusLabel={view.confidence.statusLabel}
+          status={qualitativeChipStatus(view.confidence.qualitativeLabel, view.confidence.status)}
+          statusLabel={view.confidence.qualitativeLabel}
           explanation={view.confidence.explanation}
-          context="Confidence measures evidence quality. It is not the probability that the recommendation is correct."
         />
         <MetricCard
+          marker="evidence-coverage"
+          label={view.evidenceCoverage.metricLabel}
+          value={view.evidenceCoverage.label}
+          status={view.evidenceCoverage.status}
+          statusLabel={view.evidenceCoverage.statusLabel}
+          explanation={view.evidenceCoverage.explanation}
+        />
+        <MetricCard
+          marker="search-momentum"
           label="Search Momentum"
           value={view.momentum.valueLabel}
           status={view.momentum.status}
