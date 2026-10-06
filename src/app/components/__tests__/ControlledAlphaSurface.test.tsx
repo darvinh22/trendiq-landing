@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import {
+import App, {
   ControlledCatalogView,
   filterControlledCatalog,
   loadControlledCatalog,
@@ -79,6 +79,21 @@ describe("controlled external alpha surface", () => {
     expect(listCatalog).toHaveBeenCalledTimes(1);
     expect(start).not.toHaveBeenCalled();
     expect(getStatus).not.toHaveBeenCalled();
+  });
+
+  it("keeps the phone frame inside the visible viewport so inner pages can scroll", () => {
+    const html = renderToStaticMarkup(<App client={{
+      listCatalog: async () => catalog,
+      start: async () => ({ status: "error", reason: "request_failed" }),
+      getStatus: async () => ({ status: "error", reason: "request_failed" }),
+    }} />);
+
+    expect(html).toContain("h-dvh");
+    expect(html).toContain("max-h-dvh");
+    expect(html).toContain("overflow-hidden");
+    expect(html).toContain("min-h-0");
+    expect(html).toContain("min(844px, 100%)");
+    expect(html).toContain("max-height:100%");
   });
 
   it("keeps legacy detail and provider/server modules out of the browser entry boundary", () => {

@@ -228,8 +228,12 @@ function ControlledProductResultView({
   onBack: () => void;
 }) {
   return (
-    <div className="flex flex-col h-full" style={{ background: "var(--background)" }}>
-      <div className="px-4 pt-4 pb-3 shrink-0">
+    <div
+      className="flex min-h-0 flex-1 flex-col"
+      data-result-viewport=""
+      style={{ background: "var(--background)" }}
+    >
+      <div className="shrink-0 px-4 pt-4 pb-3">
         <button
           onClick={onBack}
           className="flex items-center gap-2 px-3 py-2 rounded-xl"
@@ -239,7 +243,11 @@ function ControlledProductResultView({
           <span style={{ color: "var(--foreground)", fontSize: "0.75rem", fontWeight: 700 }}>Back</span>
         </button>
       </div>
-      <div className="flex-1 overflow-y-auto px-4 pb-6" style={{ scrollbarWidth: "none" }}>
+      <div
+        className="min-h-0 flex-1 overflow-y-auto px-4 pb-6"
+        data-result-scroll=""
+        style={{ scrollbarWidth: "none" }}
+      >
         <ConsumerResultPanel consumerResult={result} productId={productId} />
       </div>
     </div>

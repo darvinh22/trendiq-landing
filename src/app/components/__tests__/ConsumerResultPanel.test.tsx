@@ -204,6 +204,42 @@ describe("ConsumerResultPanel", () => {
     expect(html).not.toContain("Synthetic Fixture Product");
   });
 
+  it("keeps evidence chips inside their cards on narrow result layouts", () => {
+    const html = renderPanel(createConsumerProductResultFixture({
+      recommendation: "NO_RECOMMENDATION",
+      status: "unavailable",
+      score: 74,
+      scoreStatus: "degraded",
+      confidenceStatus: "degraded",
+    }));
+
+    expect(html).toContain("Evidence incomplete");
+    expect(html).toContain("Evidence limited");
+    expect(html).toContain("@container");
+    expect(html).toContain('data-metric-grid=""');
+    expect(html).toContain("grid-cols-1");
+    expect(html).toContain("@min-[42rem]:grid-cols-3");
+    expect(html).not.toContain("sm:grid-cols-3");
+
+    const chipTags = html.match(/<span\b[^>]*data-evidence-chip=""[^>]*>/g) ?? [];
+    expect(chipTags.length).toBeGreaterThan(0);
+    for (const tag of chipTags) {
+      const className = tag.match(/class="([^"]*)"/)?.[1] ?? "";
+      expect(className).toContain("max-w-full");
+      expect(className).toContain("min-w-0");
+      expect(className).toContain("whitespace-normal");
+      expect(className).toContain("break-words");
+      expect(className).not.toMatch(/\babsolute\b|\bfixed\b|\bwhitespace-nowrap\b/);
+    }
+
+    const cardTags = html.match(/<section\b[^>]*data-metric-card=""[^>]*>/g) ?? [];
+    expect(cardTags).toHaveLength(3);
+    for (const tag of cardTags) {
+      expect(tag).toContain("min-w-0");
+      expect(tag).not.toMatch(/\babsolute\b|\bfixed\b|overflow-hidden/);
+    }
+  });
+
   it("does not render injected unsafe fields", () => {
     const result = createConsumerProductResultFixture() as ConsumerProductResult & Record<string, unknown>;
     result.tiktokSays = "must-not-render-tiktok";
@@ -242,6 +278,9 @@ describe("ProductDetail safe consumer-result seam", () => {
 
     expect(html).toContain("TRENDIQ RESULT");
     expect(html).toContain("Synthetic Fixture Product");
+    expect(html).toContain('data-result-scroll=""');
+    expect(html).toContain("min-h-0");
+    expect(html).toContain("overflow-y-auto");
     expect(html).not.toContain("TIKTOK SAYS");
     expect(html).not.toContain("REDDIT SENTIMENT");
     expect(html).not.toContain("Pros &amp; Cons");
