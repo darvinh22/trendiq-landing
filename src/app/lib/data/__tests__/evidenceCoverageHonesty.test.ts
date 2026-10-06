@@ -12,7 +12,12 @@ import { RAY_BAN_META_PRODUCT_ID } from "../mockProviderSignals";
 import { buildRecommendationResult, RECOMMENDATION_POLICY } from "../recommendationEngine";
 import { buildRevenueMvpResult } from "../revenueMvpResult";
 import { buildProductTrendSnapshotFromSignals } from "../snapshotEngine";
-import type { NormalizedTrendSignal, SignalSourceProvenanceMode } from "../types";
+import type {
+  NormalizedTrendSignal,
+  SignalSourceProvenanceMode,
+  TrendIQComponentProvenanceSummary,
+  TrendIQSnapshotProvenanceSummary,
+} from "../types";
 
 const INTENDED_WEIGHT = roundTo(
   Object.values(TRENDIQ_SCORE_WEIGHTS).reduce((sum, weight) => sum + weight, 0),
@@ -44,6 +49,48 @@ function signal(input: {
       engineValue: 10,
     },
   };
+}
+
+const FULL_CONTRACT_FIELDS: Record<TrendIQScoreComponentKey, readonly string[]> = {
+  socialMomentum: ["mentions7d", "mentionGrowthPercent", "engagementRatePercent", "creatorPostCount"],
+  searchMomentum: ["searchVolume7d", "searchGrowthPercent", "queryShareOfCategoryPercent"],
+  sentiment: ["positiveMentionPercent", "negativeMentionPercent"],
+  reviewQuality: ["averageRating", "ratingEvidenceCount", "ratingConsensusQuality", "recentAverageRating"],
+  purchaseIntent: [
+    "buyingKeywordSharePercent",
+    "addToCartRatePercent",
+    "affiliateClickThroughRatePercent",
+    "saveRatePercent",
+  ],
+  growthVelocity: ["trendChangePercent", "accelerationPercent", "consecutiveGrowthDays"],
+  hypeSustainability: [
+    "repeatMentionRatePercent",
+    "sourceHalfLifeDays",
+    "creatorConcentrationPercent",
+    "evergreenInterestPercent",
+  ],
+};
+
+function coverageSnapshot(rawSignals: NormalizedTrendSignal[]) {
+  return buildProductTrendSnapshotFromSignals("coverage-fixture", rawSignals, {
+    timestamp: "2026-09-01T12:00:00.000Z",
+    sourceMode: "live",
+  });
+}
+
+function requireAudit(snapshot: { liveDataAudit?: TrendIQSnapshotProvenanceSummary }): TrendIQSnapshotProvenanceSummary {
+  const audit = snapshot.liveDataAudit;
+  if (!audit) throw new Error("expected a live data audit");
+  return audit;
+}
+
+function requireComponent(
+  audit: TrendIQSnapshotProvenanceSummary,
+  component: TrendIQScoreComponentKey
+): TrendIQComponentProvenanceSummary {
+  const summary = audit.componentSummaries.find((item) => item.component === component);
+  if (!summary) throw new Error(`expected ${component}`);
+  return summary;
 }
 
 function rayBanSearchOnlySnapshot() {
@@ -78,6 +125,9 @@ describe("evidence coverage honesty", () => {
       roundTo((audit.liveBackedScoringWeight / INTENDED_WEIGHT) * 100, 1)
     );
     expect(audit.totalActiveScoringWeight).toBeLessThan(INTENDED_WEIGHT);
+    expect(audit.unavailableWeight).toBe(
+      roundTo(INTENDED_WEIGHT - audit.totalActiveScoringWeight, 4)
+    );
   });
 
   it("keeps missing dimensions in the denominator so they reduce coverage", () => {
@@ -122,6 +172,21 @@ describe("evidence coverage honesty", () => {
     expect(activeOnlyPercent).toBe(100);
     expect(audit.liveCoveragePercent).toBe(16.8);
     expect(audit.liveCoveragePercent).toBeLessThan(100);
+
+    const search = requireComponent(audit, "searchMomentum");
+    const growth = requireComponent(audit, "growthVelocity");
+    expect(search.fields.map((field) => field.engineField)).toEqual(["searchGrowthPercent"]);
+    expect(search.liveCoveragePercent).toBe(
+      roundTo((search.liveBackedWeight / search.scoreWeight) * 100, 1)
+    );
+    expect(search.liveCoveragePercent).toBe(45);
+    expect(growth.fields.map((field) => field.engineField)).toEqual([
+      "trendChangePercent",
+      "accelerationPercent",
+      "consecutiveGrowthDays",
+    ]);
+    expect(growth.liveBackedWeight).toBe(growth.scoreWeight);
+    expect(growth.liveCoveragePercent).toBe(100);
   });
 
   it("keeps live, mixed, and mock provenance shares", () => {
@@ -154,9 +219,131 @@ describe("evidence coverage honesty", () => {
       roundTo((audit.liveBackedScoringWeight / INTENDED_WEIGHT) * 100, 1)
     );
     expect(audit.liveCoveragePercent).toBeLessThan(100);
+    expect(audit.unavailableWeight).toBe(
+      roundTo(INTENDED_WEIGHT - audit.totalActiveScoringWeight, 4)
+    );
     expect(VALIDATED_RAY_BAN_META_LIVE_SNAPSHOT.liveDataAudit?.liveCoveragePercent).toBe(37);
     expect(VALIDATED_RAY_BAN_META_LIVE_SNAPSHOT.liveDataAudit?.weightedLiveIQContribution).toBeGreaterThan(0);
     expect(VALIDATED_RAY_BAN_META_LIVE_SNAPSHOT.liveDataAudit?.weightedMockFallbackIQContribution).toBeGreaterThan(0);
+  });
+
+  it("reports zero component and snapshot coverage when no evidence is present", () => {
+    const audit = requireAudit(coverageSnapshot([]));
+
+    expect(audit.liveBackedScoringWeight).toBe(0);
+    expect(audit.totalActiveScoringWeight).toBe(0);
+    expect(audit.unavailableWeight).toBe(INTENDED_WEIGHT);
+    expect(audit.liveCoveragePercent).toBe(0);
+    for (const component of audit.componentSummaries) {
+      expect(component.fields).toEqual([]);
+      expect(component.liveBackedWeight).toBe(0);
+      expect(component.liveCoveragePercent).toBe(0);
+    }
+  });
+
+  it("scores partial live and mock evidence against the full component contract", () => {
+    const audit = requireAudit(coverageSnapshot([
+      signal({ component: "searchMomentum", engineField: "searchVolume7d", mode: "live" }),
+      signal({ component: "searchMomentum", engineField: "searchGrowthPercent", mode: "mock" }),
+    ]));
+    const search = requireComponent(audit, "searchMomentum");
+    const activeWeight = search.liveBackedWeight + search.mockFallbackWeight;
+    const activeOnlyPercent = roundTo((search.liveBackedWeight / activeWeight) * 100, 1);
+
+    expect(search.fields.map((field) => field.engineField)).toEqual([
+      "searchVolume7d",
+      "searchGrowthPercent",
+    ]);
+    expect(search.liveBackedWeight).toBe(roundTo(TRENDIQ_SCORE_WEIGHTS.searchMomentum * 0.35, 4));
+    expect(activeOnlyPercent).toBe(43.8);
+    expect(search.liveCoveragePercent).toBe(
+      roundTo((search.liveBackedWeight / search.scoreWeight) * 100, 1)
+    );
+    expect(search.liveCoveragePercent).toBe(35);
+    expect(search.scoreWeight).toBe(TRENDIQ_SCORE_WEIGHTS.searchMomentum);
+    expect(audit.liveCoveragePercent).toBe(
+      roundTo((audit.liveBackedScoringWeight / INTENDED_WEIGHT) * 100, 1)
+    );
+    expect(audit.liveCoveragePercent).toBeLessThan(search.liveCoveragePercent);
+    expect(audit.unavailableWeight).toBe(
+      roundTo(INTENDED_WEIGHT - audit.totalActiveScoringWeight, 4)
+    );
+    expect(audit.unavailableWeight).toBeGreaterThan(0);
+  });
+
+  it("reports 100% coverage only when the full score contract is live-backed", () => {
+    const audit = requireAudit(coverageSnapshot(
+      (Object.keys(FULL_CONTRACT_FIELDS) as TrendIQScoreComponentKey[]).flatMap((component) =>
+        FULL_CONTRACT_FIELDS[component].map((engineField) =>
+          signal({ component, engineField, mode: "live" })
+        )
+      )
+    ));
+
+    expect(audit.liveBackedScoringWeight).toBe(INTENDED_WEIGHT);
+    expect(audit.totalActiveScoringWeight).toBe(INTENDED_WEIGHT);
+    expect(audit.unavailableWeight).toBe(0);
+    expect(audit.liveCoveragePercent).toBe(100);
+    for (const component of audit.componentSummaries) {
+      expect(component.liveBackedWeight).toBe(component.scoreWeight);
+      expect(component.liveCoveragePercent).toBe(100);
+    }
+    expect(requireComponent(audit, "sentiment").fields.map((field) => field.engineField)).toEqual([
+      "netMentionSentimentPercent",
+      "positiveMentionPercent",
+      "negativeMentionPercent",
+    ]);
+  });
+
+  it("keeps an unavailable source inside intended weight", () => {
+    const audit = requireAudit(coverageSnapshot([
+      signal({ component: "searchMomentum", engineField: "searchVolume7d", mode: "live" }),
+    ]));
+    const reviews = requireComponent(audit, "reviewQuality");
+    const social = requireComponent(audit, "socialMomentum");
+
+    expect(reviews.fields).toEqual([]);
+    expect(reviews.liveCoveragePercent).toBe(0);
+    expect(social.fields).toEqual([]);
+    expect(social.liveCoveragePercent).toBe(0);
+    expect(audit.totalActiveScoringWeight).toBeLessThan(INTENDED_WEIGHT);
+    expect(audit.unavailableWeight).toBe(
+      roundTo(INTENDED_WEIGHT - audit.totalActiveScoringWeight, 4)
+    );
+    expect(audit.unavailableWeight).toBeGreaterThan(0);
+    expect(audit.liveCoveragePercent).toBe(
+      roundTo((audit.liveBackedScoringWeight / INTENDED_WEIGHT) * 100, 1)
+    );
+    expect(audit.liveCoveragePercent).toBeLessThan(100);
+  });
+
+  it("does not report 100% component coverage when part of that component contract is absent", () => {
+    const audit = requireAudit(coverageSnapshot([
+      signal({
+        component: "reviewQuality",
+        engineField: "ratingConsensusQuality",
+        mode: "live",
+        source: "reviews",
+      }),
+    ]));
+    const reviews = requireComponent(audit, "reviewQuality");
+    const activeOnlyPercent = roundTo(
+      (reviews.liveBackedWeight / (reviews.liveBackedWeight + reviews.mockFallbackWeight)) * 100,
+      1
+    );
+
+    expect(reviews.fields.map((field) => field.engineField)).toEqual(["ratingConsensusQuality"]);
+    expect(reviews.mockFallbackWeight).toBe(0);
+    expect(activeOnlyPercent).toBe(100);
+    expect(reviews.scoreWeight).toBe(TRENDIQ_SCORE_WEIGHTS.reviewQuality);
+    expect(reviews.liveCoveragePercent).toBe(
+      roundTo((reviews.liveBackedWeight / reviews.scoreWeight) * 100, 1)
+    );
+    expect(reviews.liveCoveragePercent).toBe(15);
+    expect(audit.liveCoveragePercent).toBe(
+      roundTo((audit.liveBackedScoringWeight / INTENDED_WEIGHT) * 100, 1)
+    );
+    expect(audit.liveCoveragePercent).toBeLessThan(reviews.liveCoveragePercent);
   });
 
   it("keeps NO_RECOMMENDATION and MISSING_REVIEW_EVIDENCE when review evidence is absent", () => {

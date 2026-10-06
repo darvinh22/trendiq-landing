@@ -158,6 +158,7 @@ export interface TrendIQSnapshotProvenanceSummary {
   weightedLiveIQContribution: number;
   weightedMockFallbackIQContribution: number;
   totalActiveScoringWeight: number;
+  unavailableWeight: number;
   liveBackedScoringWeight: number;
   mockFallbackScoringWeight: number;
   liveCoveragePercent: number;

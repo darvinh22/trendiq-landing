@@ -99,6 +99,10 @@ const COMPONENT_KEYS = Object.keys(TRENDIQ_SCORE_WEIGHTS) as TrendIQScoreCompone
  * to the live numerator and remains inside its component weight. Observed
  * live, derived-live, derived-mixed, and mock shares are unchanged.
  * totalActiveScoringWeight stays the observed-field sum.
+ * Component liveCoveragePercent uses the same contract:
+ * liveBackedWeight / TRENDIQ_SCORE_WEIGHTS[component]. Snapshot coverage
+ * stays liveBackedScoringWeight / intendedScoringWeight.
+ * unavailableWeight is intendedScoringWeight - totalActiveScoringWeight.
  */
 function intendedScoreContractWeight(): number {
   for (const component of COMPONENT_KEYS) {
@@ -245,7 +249,6 @@ function buildComponentSummary(input: {
   const componentModes = fields.map((field) => field.provenance);
   const liveBackedWeight = roundTo(fields.reduce((sum, field) => sum + field.liveBackedWeight, 0), 4);
   const mockFallbackWeight = roundTo(fields.reduce((sum, field) => sum + field.mockFallbackWeight, 0), 4);
-  const activeWeight = liveBackedWeight + mockFallbackWeight;
   const score = input.trendIQScore.components[input.component];
 
   return {
@@ -256,7 +259,7 @@ function buildComponentSummary(input: {
     provenance: combineModes(componentModes),
     liveBackedWeight,
     mockFallbackWeight,
-    liveCoveragePercent: activeWeight > 0 ? roundTo((liveBackedWeight / activeWeight) * 100, 1) : 0,
+    liveCoveragePercent: scoreWeight > 0 ? roundTo((liveBackedWeight / scoreWeight) * 100, 1) : 0,
     fields,
   };
 }
@@ -310,6 +313,7 @@ export function buildTrendIQSnapshotProvenanceSummary(input: {
     4
   );
   const intendedScoringWeight = intendedScoreContractWeight();
+  const unavailableWeight = roundTo(intendedScoringWeight - totalActiveScoringWeight, 4);
   const liveCoveragePercent = roundTo((liveBackedScoringWeight / intendedScoringWeight) * 100, 1);
 
   return {
@@ -341,6 +345,7 @@ export function buildTrendIQSnapshotProvenanceSummary(input: {
       2
     ),
     totalActiveScoringWeight,
+    unavailableWeight,
     liveBackedScoringWeight,
     mockFallbackScoringWeight,
     liveCoveragePercent,
