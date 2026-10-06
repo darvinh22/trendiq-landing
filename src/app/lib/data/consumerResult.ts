@@ -46,7 +46,7 @@ export interface ConsumerConfidencePresentation {
   status: ConsumerEvidenceStatus;
   meaning: "evidence_quality_not_correctness_probability";
   usedForDecision: boolean;
-  explanation: "Confidence reflects the quality and completeness of available evidence.";
+  explanation: string;
 }
 
 export interface ConsumerMomentumPresentation {
@@ -470,6 +470,11 @@ function trustMessage(status: RecommendationResultStatus): string {
   return "TrendIQ does not yet have enough trustworthy evidence for this result.";
 }
 
+function confidenceExplanation(provenanceWarning: string | null | undefined): string {
+  if (!provenanceWarning) return CONFIDENCE_EXPLANATION;
+  return `${CONFIDENCE_EXPLANATION} ${provenanceWarning}`;
+}
+
 function scoreExplanation(status: ConsumerEvidenceStatus): string {
   if (status === "verified") return "The Score is backed by fully verified evidence.";
   if (status === "degraded") return "The Score is available but is not fully verified.";
@@ -684,7 +689,7 @@ export function buildConsumerProductResult(input: BuildConsumerProductResultInpu
       status: confidenceStatus,
       meaning: "evidence_quality_not_correctness_probability",
       usedForDecision: result.evidence.confidence.usedForDirection,
-      explanation: CONFIDENCE_EXPLANATION,
+      explanation: confidenceExplanation(result.evidence.confidence.provenanceWarning),
     },
     momentum: {
       direction: momentumStatus === "unavailable" ? null : result.evidence.searchMomentum.direction,
