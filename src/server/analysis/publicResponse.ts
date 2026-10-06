@@ -31,6 +31,7 @@ const CONSUMER_RESULT_SCHEMA: PublicSchema = {
     liveCoveragePercent: true,
     usedForDecision: true,
     explanation: true,
+    scoreInputIncomplete: true,
   },
   confidence: {
     value: true,

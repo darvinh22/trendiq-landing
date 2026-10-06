@@ -91,6 +91,40 @@ const COMPONENT_FIELD_WEIGHTS: Record<TrendIQScoreComponentKey, readonly ScoreFi
 
 const COMPONENT_KEYS = Object.keys(TRENDIQ_SCORE_WEIGHTS) as TrendIQScoreComponentKey[];
 
+/**
+ * Snapshot live-coverage denominator.
+ *
+ * TRENDIQ_SCORE_WEIGHTS is safe to use directly because every component's
+ * field weights sum to 1. An intended field with no signals therefore adds 0
+ * to the live numerator and remains inside its component weight. Observed
+ * live, derived-live, derived-mixed, and mock shares are unchanged.
+ * totalActiveScoringWeight stays the observed-field sum.
+ */
+function intendedScoreContractWeight(): number {
+  for (const component of COMPONENT_KEYS) {
+    const fieldWeight = roundTo(
+      COMPONENT_FIELD_WEIGHTS[component].reduce((sum, field) => sum + field.weight, 0),
+      4
+    );
+    const componentWeight = TRENDIQ_SCORE_WEIGHTS[component];
+    if (!Number.isFinite(componentWeight) || componentWeight <= 0 || fieldWeight !== 1) {
+      throw new Error(
+        `TRENDIQ_SCORE_WEIGHTS cannot safely be the live coverage denominator (${component})`
+      );
+    }
+  }
+
+  const total = roundTo(
+    COMPONENT_KEYS.reduce((sum, component) => sum + TRENDIQ_SCORE_WEIGHTS[component], 0),
+    4
+  );
+  if (!(total > 0)) {
+    throw new Error("TRENDIQ_SCORE_WEIGHTS cannot safely be the live coverage denominator");
+  }
+
+  return total;
+}
+
 function emptyContributionMap(): Record<SignalSourceProvenanceMode, number> {
   return PROVENANCE_MODES.reduce((mapped, mode) => ({
     ...mapped,
@@ -275,9 +309,8 @@ export function buildTrendIQSnapshotProvenanceSummary(input: {
     componentSummaries.reduce((sum, component) => sum + component.mockFallbackWeight, 0),
     4
   );
-  const liveCoveragePercent = totalActiveScoringWeight > 0
-    ? roundTo((liveBackedScoringWeight / totalActiveScoringWeight) * 100, 1)
-    : 0;
+  const intendedScoringWeight = intendedScoreContractWeight();
+  const liveCoveragePercent = roundTo((liveBackedScoringWeight / intendedScoringWeight) * 100, 1);
 
   return {
     overallTrendIQScore: input.trendIQScore.score,

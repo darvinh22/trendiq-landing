@@ -124,6 +124,7 @@ export interface RecommendationEvidenceSummary {
     score: number | null;
     liveCoveragePercent: number | null;
     usedForDirection: boolean;
+    inputIncomplete?: boolean;
   };
   confidence: {
     state: RevenueMvpExposureState;
@@ -749,6 +750,8 @@ function extractEvidence(result: RevenueMvpResult, evaluatedAtMs: number): Extra
       score,
       liveCoveragePercent: finiteInRange(result.score.liveCoveragePercent, 0, 100),
       usedForDirection: false,
+      inputIncomplete:
+        Array.isArray(result.score.reasons) && result.score.reasons.includes("score_input_is_incomplete"),
     },
     confidence: {
       state: confidenceState,

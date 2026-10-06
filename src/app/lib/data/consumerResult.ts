@@ -38,6 +38,7 @@ export interface ConsumerScorePresentation {
   liveCoveragePercent: number | null;
   usedForDecision: boolean;
   explanation: string;
+  scoreInputIncomplete?: boolean;
 }
 
 export interface ConsumerConfidencePresentation {
@@ -524,6 +525,7 @@ function unavailableScore(): ConsumerScorePresentation {
     liveCoveragePercent: null,
     usedForDecision: false,
     explanation: scoreExplanation("unavailable"),
+    scoreInputIncomplete: false,
   };
 }
 
@@ -682,6 +684,7 @@ export function buildConsumerProductResult(input: BuildConsumerProductResultInpu
       liveCoveragePercent: result.evidence.score.liveCoveragePercent,
       usedForDecision: result.evidence.score.usedForDirection,
       explanation: scoreExplanation(scoreStatus),
+      scoreInputIncomplete: result.evidence.score.inputIncomplete === true,
     },
     confidence: {
       value: confidenceStatus === "unavailable" ? null : result.evidence.confidence.score,
