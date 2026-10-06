@@ -31,7 +31,8 @@ export function ProductDetail(props: ProductDetailProps) {
   if ("consumerResult" in props) {
     return (
       <div
-        className="flex flex-col h-full overflow-y-auto"
+        className="flex h-full min-h-0 flex-col overflow-y-auto"
+        data-result-scroll=""
         style={{ background: "var(--background)", scrollbarWidth: "none" }}
       >
         <div className="px-4 pt-4">

@@ -32,7 +32,8 @@ function EvidenceStatus({ status, label }: { status: ConsumerEvidenceStatus; lab
   const color = statusColor(status);
   return (
     <span
-      className="inline-flex items-center px-2 py-1 rounded-full"
+      data-evidence-chip=""
+      className="inline-flex w-fit max-w-full min-w-0 items-center break-words whitespace-normal rounded-full px-2 py-1 text-left"
       style={{
         color,
         background: `${color}14`,
@@ -63,12 +64,13 @@ function MetricCard({
 }) {
   return (
     <section
-      className="rounded-xl p-3"
+      data-metric-card=""
+      className="min-w-0 rounded-xl p-3"
       style={{ background: "rgba(255,255,255,0.03)", border: "1px solid var(--border)" }}
       aria-label={label}
     >
-      <div className="flex items-start justify-between gap-2 mb-2">
-        <span style={{ color: "var(--muted-foreground)", fontSize: "0.67rem", fontWeight: 700 }}>
+      <div className="mb-2 flex min-w-0 flex-wrap items-start justify-between gap-2">
+        <span className="min-w-0 max-w-full" style={{ color: "var(--muted-foreground)", fontSize: "0.67rem", fontWeight: 700 }}>
           {label.toUpperCase()}
         </span>
         <EvidenceStatus status={status} label={statusLabel} />
@@ -106,7 +108,7 @@ export function ConsumerResultPanel({ consumerResult, productId }: ConsumerResul
     : view.score.explanation;
 
   return (
-    <article className="flex flex-col gap-4" data-consumer-result-version={view.version}>
+    <article className="@container flex w-full min-w-0 flex-col gap-4" data-consumer-result-version={view.version}>
       <header>
         <p style={{ color: "#18D3D1", fontSize: "0.64rem", fontWeight: 800, letterSpacing: "0.1em" }}>
           TRENDIQ RESULT
@@ -126,7 +128,7 @@ export function ConsumerResultPanel({ consumerResult, productId }: ConsumerResul
         style={{ background: `${decisionColor}0D`, border: `1px solid ${decisionColor}40` }}
         aria-label="Recommendation"
       >
-        <div className="flex flex-wrap items-center gap-2 mb-3">
+        <div className="mb-3 flex min-w-0 flex-wrap items-center gap-2">
           <span
             className="px-3 py-1 rounded-full"
             style={{ color: decisionColor, background: `${decisionColor}18`, fontSize: "0.78rem", fontWeight: 900 }}
@@ -146,7 +148,7 @@ export function ConsumerResultPanel({ consumerResult, productId }: ConsumerResul
         </p>
       </section>
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+      <div data-metric-grid="" className="grid min-w-0 grid-cols-1 gap-3 @min-[42rem]:grid-cols-3">
         <MetricCard
           label="TrendIQ Score"
           value={withholdPartialScore ? "Evidence incomplete" : view.score.valueLabel}
@@ -177,11 +179,11 @@ export function ConsumerResultPanel({ consumerResult, productId }: ConsumerResul
         style={{ background: "var(--card)", border: "1px solid var(--border)" }}
         aria-label="Review evidence"
       >
-        <div className="flex items-center justify-between gap-2 mb-3">
+        <div className="mb-3 flex min-w-0 flex-wrap items-center justify-between gap-2">
           <h2 style={{ color: "var(--foreground)", fontSize: "0.85rem", fontWeight: 800 }}>Review evidence</h2>
           <EvidenceStatus status={view.reviews.status} label={view.reviews.statusLabel} />
         </div>
-        <dl className="grid grid-cols-2 gap-3">
+        <dl className="grid min-w-0 grid-cols-2 gap-3">
           <div>
             <dt style={{ color: "var(--muted-foreground)", fontSize: "0.65rem" }}>Aggregate rating</dt>
             <dd style={{ color: "var(--foreground)", fontSize: "0.82rem", fontWeight: 700 }}>
@@ -296,23 +298,23 @@ export function ConsumerResultPanel({ consumerResult, productId }: ConsumerResul
         className="rounded-xl p-3"
         style={{ background: "rgba(255,255,255,0.025)", border: "1px solid var(--border)" }}
       >
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
           <span style={{ color: "var(--muted-foreground)", fontSize: "0.67rem", fontWeight: 700 }}>EVIDENCE TRUST</span>
           <EvidenceStatus status={view.trust.status} label={view.trust.statusLabel} />
         </div>
         <p style={{ color: "var(--muted-foreground)", fontSize: "0.68rem", lineHeight: 1.45, marginTop: 7 }}>
           {view.trust.summary}
         </p>
-        <dl className="grid grid-cols-1 gap-1 mt-3">
-          <div className="flex items-center justify-between gap-3">
+        <dl className="mt-3 grid min-w-0 grid-cols-1 gap-1">
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1">
             <dt style={{ color: "var(--muted-foreground)", fontSize: "0.66rem" }}>Evaluated</dt>
-            <dd style={{ color: "var(--foreground)", fontSize: "0.66rem", fontWeight: 700 }}>
+            <dd className="min-w-0 max-w-full" style={{ color: "var(--foreground)", fontSize: "0.66rem", fontWeight: 700 }}>
               {view.trust.evaluatedAtLabel}
             </dd>
           </div>
-          <div className="flex items-center justify-between gap-3">
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1">
             <dt style={{ color: "var(--muted-foreground)", fontSize: "0.66rem" }}>Evidence freshness</dt>
-            <dd style={{ color: "var(--foreground)", fontSize: "0.66rem", fontWeight: 700 }}>
+            <dd className="min-w-0 max-w-full break-words" style={{ color: "var(--foreground)", fontSize: "0.66rem", fontWeight: 700 }}>
               {view.trust.freshnessStatusLabel} · {view.trust.freshnessAgeLabel}
             </dd>
           </div>

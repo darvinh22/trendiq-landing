@@ -48,7 +48,7 @@ export function ControlledCatalogView({
   );
 
   return (
-    <div className="flex flex-col h-full min-h-0">
+    <div className="flex h-full min-h-0 flex-col">
       <header className="px-6 pt-6 pb-4" style={{ borderBottom: "1px solid var(--border)" }}>
         <div className="flex items-center gap-2">
           <span style={{ color: "#18D3D1", fontWeight: 800, fontSize: "1.5rem", letterSpacing: "-0.03em" }}>
@@ -69,7 +69,7 @@ export function ControlledCatalogView({
         </p>
       </header>
 
-      <main className="flex-1 overflow-y-auto px-4 py-4" style={{ scrollbarWidth: "none" }}>
+      <main className="min-h-0 flex-1 overflow-y-auto px-4 py-4" style={{ scrollbarWidth: "none" }}>
         <div
           className="flex items-center gap-2.5 px-3.5 py-2.5 rounded-2xl mb-4"
           style={{ background: "var(--secondary)", border: "1px solid var(--border)" }}
@@ -154,14 +154,15 @@ export default function App({ client = productAnalysisClient }: AppProps) {
 
   return (
     <div
-      className="size-full flex items-center justify-center"
+      className="fixed inset-0 flex h-dvh max-h-dvh min-h-0 w-full items-center justify-center overflow-hidden"
       style={{ background: "#04050A", fontFamily: "'Inter', sans-serif" }}
     >
       <div
-        className="relative flex flex-col overflow-hidden"
+        className="relative flex h-full min-h-0 w-full max-w-[390px] flex-col overflow-hidden"
         style={{
           width: "min(390px, 100%)",
           height: "min(844px, 100%)",
+          maxHeight: "100%",
           background: "var(--background)",
           borderRadius: "clamp(0px, 4vw, 44px)",
           boxShadow: "0 0 0 1px rgba(255,255,255,0.06), 0 40px 80px rgba(0,0,0,0.8)",

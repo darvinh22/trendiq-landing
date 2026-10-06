@@ -66,6 +66,11 @@ describe("ProductAnalysisScreen", () => {
     expect(html).toContain("WAIT");
     expect(html).toContain("Evidence verified");
     expect(html).not.toMatch(/TIKTOK SAYS|REDDIT SENTIMENT|Similar Alternatives/i);
+    expect(html).toContain('data-result-viewport=""');
+    expect(html).toContain('data-result-scroll=""');
+    expect(html).toContain("min-h-0");
+    expect(html).toContain("overflow-y-auto");
+    expect(html).not.toMatch(/max-h-\[|h-screen|h-\[844px\]/);
   });
 
   it("renders settled unavailable without Retry and transient states with explicit Retry", () => {
