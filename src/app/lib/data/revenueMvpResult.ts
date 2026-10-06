@@ -92,6 +92,7 @@ export interface RevenueMvpConfidenceValue {
   level: ConfidenceLevel;
   scoreVersion: ScoreVersion;
   meaning: "evidence_quality_not_correctness_probability";
+  provenanceWarning: string | null;
 }
 
 export interface RevenueMvpConfidenceExposure extends RevenueMvpExposure<RevenueMvpConfidenceValue> {
@@ -534,6 +535,19 @@ function scoreExposure(snapshot: ProductTrendSnapshot): RevenueMvpScoreExposure 
   };
 }
 
+function consumerProvenanceWarning(snapshot: ProductTrendSnapshot): string | null {
+  if (snapshot.liveDataAudit?.confidenceProvenanceWarning !== true || snapshot.confidence.level !== "High") {
+    return null;
+  }
+
+  const reason = snapshot.liveDataAudit.confidenceProvenanceWarningReason;
+  if (!reason) {
+    return "Confidence is capped at Good because live coverage is below the provenance-warning threshold.";
+  }
+
+  return reason.replace(/^Confidence is High\b/, "Confidence is capped at Good");
+}
+
 function confidenceExposure(snapshot: ProductTrendSnapshot): RevenueMvpConfidenceExposure {
   const score = finiteNumber(snapshot.confidence.score);
   const liveCoverage = liveCoveragePercent(snapshot);
@@ -550,18 +564,23 @@ function confidenceExposure(snapshot: ProductTrendSnapshot): RevenueMvpConfidenc
     };
   }
 
+  const provenanceWarning = consumerProvenanceWarning(snapshot);
   const value: RevenueMvpConfidenceValue = {
     score,
-    level: snapshot.confidence.level,
+    level: provenanceWarning ? "Good" : snapshot.confidence.level,
     scoreVersion: snapshot.confidence.scoreVersion,
     meaning: "evidence_quality_not_correctness_probability",
+    provenanceWarning,
   };
 
   if (liveCoverage === 100 && totalActiveScoringWeight === 1 && !hasUnsupportedScoreComponents) {
     return {
       state: "verified",
       value,
-      reasons: ["confidence_inputs_are_live_backed"],
+      reasons: [
+        "confidence_inputs_are_live_backed",
+        ...(provenanceWarning ? [provenanceWarning] : []),
+      ],
       liveCoveragePercent: liveCoverage,
     };
   }
@@ -574,6 +593,7 @@ function confidenceExposure(snapshot: ProductTrendSnapshot): RevenueMvpConfidenc
         "confidence_is_data_quality_not_correctness_probability",
         ...(totalActiveScoringWeight !== 1 ? ["confidence_inputs_do_not_cover_all_score_dimensions"] : []),
         ...(hasUnsupportedScoreComponents ? ["confidence_inputs_include_currently_unsupported_external_dimensions"] : []),
+        ...(provenanceWarning ? [provenanceWarning] : []),
       ],
       liveCoveragePercent: liveCoverage,
     };

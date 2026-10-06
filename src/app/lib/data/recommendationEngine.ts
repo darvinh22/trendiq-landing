@@ -130,6 +130,7 @@ export interface RecommendationEvidenceSummary {
     score: number | null;
     level: "Low" | "Developing" | "Good" | "High" | null;
     meaning: "evidence_quality_not_correctness_probability";
+    provenanceWarning: string | null;
     usedForDirection: boolean;
   };
   searchMomentum: {
@@ -512,6 +513,7 @@ function emptyEvidence(): RecommendationEvidenceSummary {
       score: null,
       level: null,
       meaning: "evidence_quality_not_correctness_probability",
+      provenanceWarning: null,
       usedForDirection: false,
     },
     searchMomentum: {
@@ -676,6 +678,9 @@ function extractEvidence(result: RevenueMvpResult, evaluatedAtMs: number): Extra
   const confidenceScore = finiteInRange(confidenceValue?.score, 0, 100);
   const confidenceLevel = enumValue(confidenceValue?.level, CONFIDENCE_LEVELS) as ConfidenceLevel | null;
   const confidenceMeaning = confidenceValue?.meaning;
+  const provenanceWarning = typeof confidenceValue?.provenanceWarning === "string" && confidenceValue.provenanceWarning.trim()
+    ? confidenceValue.provenanceWarning
+    : null;
   const confidenceState =
     confidenceScore !== null &&
     confidenceLevel !== null &&
@@ -750,6 +755,7 @@ function extractEvidence(result: RevenueMvpResult, evaluatedAtMs: number): Extra
       score: confidenceScore,
       level: confidenceLevel,
       meaning: "evidence_quality_not_correctness_probability",
+      provenanceWarning,
       usedForDirection: false,
     },
     searchMomentum: {
