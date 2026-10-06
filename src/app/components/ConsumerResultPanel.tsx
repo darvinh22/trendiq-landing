@@ -16,6 +16,12 @@ function recommendationColor(recommendation: Recommendation): string {
   return "#A7ACB8";
 }
 
+function scoreInputIsIncomplete(consumerResult: unknown): boolean {
+  if (typeof consumerResult !== "object" || consumerResult === null) return false;
+  const score = (consumerResult as { score?: { scoreInputIncomplete?: unknown } }).score;
+  return score?.scoreInputIncomplete === true;
+}
+
 function statusColor(status: ConsumerEvidenceStatus): string {
   if (status === "verified") return "#4CAF82";
   if (status === "degraded") return "#FFB547";
@@ -83,11 +89,21 @@ function MetricCard({
 export function ConsumerResultPanel({ consumerResult, productId }: ConsumerResultPanelProps) {
   const view = buildConsumerResultViewModel({ consumerResult, productId });
   const decisionColor = recommendationColor(view.decision.recommendation);
-  const scoreCoverageContext =
+  const withholdPartialScore =
+    scoreInputIsIncomplete(consumerResult) ||
+    (view.decision.recommendation === "NO_RECOMMENDATION" && view.score.value !== null);
+  const showLiveCoverage =
+    !withholdPartialScore &&
     view.score.liveCoveragePercent !== null &&
-    (view.score.status === "degraded" || view.score.liveCoveragePercent < 100)
-      ? `Live evidence coverage: ${view.score.liveCoveragePercent}%`
-      : undefined;
+    (view.score.status === "degraded" || view.score.liveCoveragePercent < 100);
+  const scoreCoverageContext = showLiveCoverage
+    ? `Live evidence coverage: ${view.score.liveCoveragePercent}%`
+    : undefined;
+  const scoreExplanation = withholdPartialScore
+    ? view.decision.recommendation === "NO_RECOMMENDATION"
+      ? "Evidence is incomplete, so a recommendation cannot safely be made."
+      : "Evidence is incomplete, so this Score is not a complete product judgment."
+    : view.score.explanation;
 
   return (
     <article className="flex flex-col gap-4" data-consumer-result-version={view.version}>
@@ -133,10 +149,10 @@ export function ConsumerResultPanel({ consumerResult, productId }: ConsumerResul
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <MetricCard
           label="TrendIQ Score"
-          value={view.score.valueLabel}
-          status={view.score.status}
-          statusLabel={view.score.statusLabel}
-          explanation={view.score.explanation}
+          value={withholdPartialScore ? "Evidence incomplete" : view.score.valueLabel}
+          status={withholdPartialScore ? "unavailable" : view.score.status}
+          statusLabel={withholdPartialScore ? "Evidence incomplete" : view.score.statusLabel}
+          explanation={scoreExplanation}
           context={scoreCoverageContext}
         />
         <MetricCard

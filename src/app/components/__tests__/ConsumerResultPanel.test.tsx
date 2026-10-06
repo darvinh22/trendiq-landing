@@ -51,6 +51,54 @@ describe("ConsumerResultPanel", () => {
     expect(html).toContain("Momentum unavailable");
   });
 
+  it("does not headline a partial score when no recommendation can be made", () => {
+    const html = renderPanel(createConsumerProductResultFixture({
+      recommendation: "NO_RECOMMENDATION",
+      status: "unavailable",
+      score: 74,
+      scoreStatus: "degraded",
+      liveCoveragePercent: 100,
+    }));
+
+    expect(html).toContain("NO RECOMMENDATION");
+    expect(html).toContain("Evidence incomplete");
+    expect(html).toContain("a recommendation cannot safely be made");
+    expect(html).toContain("Rising");
+    expect(html).not.toContain("Live evidence coverage:");
+    expect(html).not.toContain(">74<");
+  });
+
+  it("does not headline a partial score when score input is incomplete", () => {
+    const html = renderPanel(createConsumerProductResultFixture({
+      recommendation: "BUY",
+      score: 68,
+      scoreStatus: "degraded",
+      liveCoveragePercent: 100,
+      scoreInputIncomplete: true,
+    }));
+
+    expect(html).toContain("BUY");
+    expect(html).toContain("Evidence incomplete");
+    expect(html).toContain("not a complete product judgment");
+    expect(html).toContain("Rising");
+    expect(html).not.toContain("Live evidence coverage:");
+    expect(html).not.toContain(">68<");
+  });
+
+  it("still shows a normal score when evidence is sufficiently complete", () => {
+    const html = renderPanel(createConsumerProductResultFixture({
+      recommendation: "BUY",
+      score: 82,
+      scoreStatus: "verified",
+      liveCoveragePercent: 100,
+    }));
+
+    expect(html).toContain("BUY");
+    expect(html).toContain(">82<");
+    expect(html).toContain("The Score is backed by fully verified evidence.");
+    expect(html).not.toContain("Evidence incomplete");
+  });
+
   it("shows live coverage when a numeric Score is degraded", () => {
     const html = renderPanel(createConsumerProductResultFixture({
       score: 68,

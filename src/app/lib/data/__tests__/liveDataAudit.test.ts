@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { calculateConfidenceScore } from "../../scoring/confidenceEngine";
 import { calculateTrendMomentum } from "../../scoring/momentumEngine";
-import { calculateTrendIQScore } from "../../scoring/scoreEngine";
+import { calculateTrendIQScore, TRENDIQ_SCORE_WEIGHTS } from "../../scoring/scoreEngine";
+import { roundTo } from "../../scoring/normalization";
 import { VALIDATED_RAY_BAN_META_LIVE_SNAPSHOT } from "../liveSnapshotFixtures";
 import { DATA_LAYER_TIMESTAMP, RAY_BAN_META_PRODUCT_ID } from "../mockProviderSignals";
 import { mockTrendSignalProviders } from "../providers";
@@ -66,13 +67,21 @@ describe("live data audit", () => {
     });
   });
 
-  it("reports DataForSEO-only active fields as fully live-covered", () => {
+  it("does not treat DataForSEO-only active fields as full contract coverage", () => {
     const audit = dataForSeoOnlyAudit();
+    const intendedWeight = roundTo(
+      Object.values(TRENDIQ_SCORE_WEIGHTS).reduce((sum, weight) => sum + weight, 0),
+      4
+    );
 
-    expect(audit.liveCoveragePercent).toBe(100);
     expect(audit.mockFallbackScoringWeight).toBe(0);
     expect(audit.liveComponents).toEqual(["searchMomentum", "growthVelocity"]);
     expect(audit.liveBackedScoringWeight).toBeGreaterThan(0);
+    expect(audit.totalActiveScoringWeight).toBeLessThan(intendedWeight);
+    expect(audit.liveCoveragePercent).toBe(
+      roundTo((audit.liveBackedScoringWeight / intendedWeight) * 100, 1)
+    );
+    expect(audit.liveCoveragePercent).toBeLessThan(100);
     expect(audit.componentSummaries.some((component) =>
       component.fields.some((field) => field.provenance === "derived-live")
     )).toBe(true);

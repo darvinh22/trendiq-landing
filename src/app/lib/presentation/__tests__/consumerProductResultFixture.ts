@@ -17,6 +17,7 @@ export interface ConsumerProductResultFixtureOptions {
   textEvidenceStatus?: ConsumerEvidenceStatus;
   watchOuts?: string[];
   liveCoveragePercent?: number | null;
+  scoreInputIncomplete?: boolean;
   missingEvidence?: ConsumerProductResult["explanation"]["missingEvidence"];
   evaluatedAt?: string | null;
   freshnessStatus?: ConsumerEvidenceStatus;
@@ -113,6 +114,7 @@ export function createConsumerProductResultFixture(
           : scoreStatus === "degraded"
             ? "The Score is available but is not fully verified."
             : "A trustworthy Score is unavailable.",
+      scoreInputIncomplete: options.scoreInputIncomplete === true,
     },
     confidence: {
       value: confidence,
