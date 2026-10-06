@@ -224,6 +224,7 @@ describe("live data audit", () => {
     )).toBeUndefined();
     expect(reviewComponent?.liveBackedWeight).toBe(0.0225);
     expect(reviewComponent?.mockFallbackWeight).toBe(0);
-    expect(reviewComponent?.liveCoveragePercent).toBe(100);
+    expect(reviewComponent?.scoreWeight).toBe(TRENDIQ_SCORE_WEIGHTS.reviewQuality);
+    expect(reviewComponent?.liveCoveragePercent).toBe(15);
   });
 });
