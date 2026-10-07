@@ -17,6 +17,8 @@ export interface ConsumerProductResultFixtureOptions {
   textEvidenceStatus?: ConsumerEvidenceStatus;
   watchOuts?: string[];
   liveCoveragePercent?: number | null;
+  verifiedCoveragePercent?: number | null;
+  confidenceLevel?: "Low" | "Developing" | "Good" | "High" | null;
   scoreInputIncomplete?: boolean;
   missingEvidence?: ConsumerProductResult["explanation"]["missingEvidence"];
   evaluatedAt?: string | null;
@@ -67,6 +69,20 @@ export function createConsumerProductResultFixture(
   const score = options.score === undefined ? (scoreStatus === "unavailable" ? null : 82) : options.score;
   const confidence =
     options.confidence === undefined ? (confidenceStatus === "unavailable" ? null : 90) : options.confidence;
+  const confidenceLevel =
+    options.confidenceLevel === undefined
+      ? confidenceStatus === "unavailable"
+        ? null
+        : status === "degraded"
+          ? "Developing"
+          : "High"
+      : options.confidenceLevel;
+  const verifiedCoveragePercent =
+    options.verifiedCoveragePercent === undefined
+      ? status === "unavailable"
+        ? null
+        : 100
+      : options.verifiedCoveragePercent;
   const momentumDirection =
     options.momentumDirection === undefined
       ? momentumStatus === "unavailable"
@@ -118,7 +134,7 @@ export function createConsumerProductResultFixture(
     },
     confidence: {
       value: confidence,
-      level: confidenceStatus === "unavailable" ? null : status === "degraded" ? "Developing" : "High",
+      level: confidenceLevel,
       status: confidenceStatus,
       meaning: "evidence_quality_not_correctness_probability",
       usedForDecision: confidenceStatus !== "unavailable",
@@ -181,7 +197,7 @@ export function createConsumerProductResultFixture(
     trust: {
       status,
       summary: trustCopy(status),
-      verifiedCoveragePercent: status === "unavailable" ? null : 100,
+      verifiedCoveragePercent,
       verifiedDimensions: status === "verified" ? ["score", "confidence", "searchMomentum", "reviewAggregate"] : [],
       degradedDimensions: status === "degraded" ? ["score", "confidence"] : [],
       unavailableDimensions: [

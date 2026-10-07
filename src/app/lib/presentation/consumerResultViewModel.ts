@@ -6,6 +6,11 @@ import type {
   ConsumerMomentumStrength,
   ConsumerProductResult,
 } from "../data/consumerResult";
+import {
+  presentSignalQuality,
+  type ConsumerQualitativeLabel,
+  type EvidenceCoveragePresentation,
+} from "./signalQualityPresentation";
 
 type Recommendation = ConsumerProductResult["decision"]["recommendation"];
 type RecommendationResultStatus = ConsumerProductResult["decision"]["status"];
@@ -43,10 +48,14 @@ export interface ConsumerResultViewModel {
     usedForDecision: boolean;
   };
   confidence: ConsumerMetricViewModel<number> & {
+    metricLabel: "Signal Quality";
     level: ConsumerConfidenceLevel | null;
+    qualitativeLabel: ConsumerQualitativeLabel;
+    qualitativeSuppressed: boolean;
     meaning: "evidence_quality_not_correctness_probability";
     usedForDecision: boolean;
   };
+  evidenceCoverage: EvidenceCoveragePresentation;
   momentum: ConsumerMetricViewModel<ConsumerMomentumDirection> & {
     direction: ConsumerMomentumDirection | null;
     strength: ConsumerMomentumStrength | null;
@@ -403,7 +412,35 @@ function textEvidenceMessage(status: ConsumerEvidenceStatus): string {
   return "Review text evidence is unavailable; no themes are presented.";
 }
 
+function consumerReasonMessage(reason: ConsumerProductResult["explanation"]["reasons"][number]) {
+  if (reason.code === "CONFIDENCE_IS_EVIDENCE_QUALITY") {
+    return {
+      ...reason,
+      message:
+        "Signal Quality measures the quality of available signals. It is not confidence that the recommendation is correct.",
+    };
+  }
+  if (reason.code === "LOW_EVIDENCE_QUALITY") {
+    return {
+      ...reason,
+      message: "Signal Quality is too low for a directional recommendation.",
+    };
+  }
+  return { ...reason };
+}
+
 function unavailableViewModel(productId: string, issue: ConsumerUiIssueCode): ConsumerResultViewModel {
+  const signalQuality = presentSignalQuality({
+    confidenceValue: null,
+    confidenceLevel: null,
+    confidenceStatus: "unavailable",
+    recommendation: "NO_RECOMMENDATION",
+    decisionStatus: "unavailable",
+    liveCoveragePercent: null,
+    verifiedCoveragePercent: null,
+    reasonCodes: [],
+  });
+
   return {
     version: "consumer_result_view_model_v1",
     product: { id: productId, name: "Product result unavailable", brand: null, category: null },
@@ -427,14 +464,18 @@ function unavailableViewModel(productId: string, issue: ConsumerUiIssueCode): Co
     },
     confidence: {
       value: null,
-      valueLabel: "Confidence unavailable",
+      valueLabel: signalQuality.valueLabel,
       status: "unavailable",
       statusLabel: statusLabel("unavailable"),
-      explanation: "Confidence reflects the quality and completeness of available evidence.",
+      explanation: signalQuality.explanation,
+      metricLabel: signalQuality.metricLabel,
       level: null,
+      qualitativeLabel: signalQuality.qualitativeLabel,
+      qualitativeSuppressed: signalQuality.qualitativeSuppressed,
       meaning: "evidence_quality_not_correctness_probability",
       usedForDecision: false,
     },
+    evidenceCoverage: signalQuality.evidenceCoverage,
     momentum: {
       value: null,
       valueLabel: "Momentum unavailable",
@@ -514,6 +555,16 @@ export function buildConsumerResultViewModel(input: BuildConsumerResultViewModel
     return unavailableViewModel(productId, "UI_PRODUCT_BINDING_MISMATCH");
   }
 
+  const signalQuality = presentSignalQuality({
+    confidenceValue: result.confidence.value,
+    confidenceLevel: result.confidence.level,
+    confidenceStatus: result.confidence.status,
+    recommendation: result.decision.recommendation,
+    decisionStatus: result.decision.status,
+    liveCoveragePercent: result.score.liveCoveragePercent,
+    verifiedCoveragePercent: result.trust.verifiedCoveragePercent,
+    reasonCodes: result.explanation.reasons.map((reason) => reason.code),
+  });
   const momentumParts = [result.momentum.direction, result.momentum.strength].filter(
     (value): value is string => value !== null
   );
@@ -546,15 +597,18 @@ export function buildConsumerResultViewModel(input: BuildConsumerResultViewModel
     },
     confidence: {
       value: result.confidence.value,
-      valueLabel:
-        result.confidence.value === null ? "Confidence unavailable" : `${result.confidence.value} evidence quality`,
+      valueLabel: signalQuality.valueLabel,
       status: result.confidence.status,
       statusLabel: statusLabel(result.confidence.status),
-      explanation: result.confidence.explanation,
+      explanation: signalQuality.explanation,
+      metricLabel: signalQuality.metricLabel,
       level: result.confidence.level,
+      qualitativeLabel: signalQuality.qualitativeLabel,
+      qualitativeSuppressed: signalQuality.qualitativeSuppressed,
       meaning: result.confidence.meaning,
       usedForDecision: result.confidence.usedForDecision,
     },
+    evidenceCoverage: signalQuality.evidenceCoverage,
     momentum: {
       value: result.momentum.direction,
       valueLabel: result.momentum.direction === null ? "Momentum unavailable" : momentumParts.join(" · "),
@@ -608,7 +662,7 @@ export function buildConsumerResultViewModel(input: BuildConsumerResultViewModel
     take: {
       headline: result.decision.headline,
       summary: result.decision.summary,
-      reasons: result.explanation.reasons.map((reason) => ({ ...reason })),
+      reasons: result.explanation.reasons.map((reason) => consumerReasonMessage(reason)),
       watchOuts: [...result.explanation.watchOuts],
       missingEvidence: result.explanation.missingEvidence.map((key) => ({ key, label: missingEvidenceLabel(key) })),
     },

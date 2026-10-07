@@ -42,7 +42,7 @@ function consumerPath() {
 }
 
 describe("confidence provenance exposure", () => {
-  it("caps the mixed Ray-Ban snapshot at Good and shows the coverage warning on the public card", () => {
+  it("keeps the numeric score and exposure band while the public card withholds Good", () => {
     expect(VALIDATED_RAY_BAN_META_LIVE_SNAPSHOT.confidence.level).toBe("High");
     expect(VALIDATED_RAY_BAN_META_LIVE_SNAPSHOT.confidence.score).toBe(92);
     expect(VALIDATED_RAY_BAN_META_LIVE_SNAPSHOT.liveDataAudit?.liveCoveragePercent).toBe(37);
@@ -63,15 +63,32 @@ describe("confidence provenance exposure", () => {
     expect(redacted?.confidence.explanation).not.toContain("Confidence is High");
 
     expect(view.confidence.level).toBe("Good");
-    expect(view.confidence.explanation).toContain(warning);
+    expect(view.confidence.value).toBe(92);
+    expect(view.confidence.qualitativeSuppressed).toBe(true);
+    expect(view.confidence.qualitativeLabel).not.toMatch(/^(Good|High)$/);
+    expect(view.evidenceCoverage).toMatchObject({
+      percent: 37,
+      label: "37%",
+      source: "liveCoveragePercent",
+    });
+    expect(view.confidence.explanation).not.toContain(warning);
+    expect(view.confidence.explanation).not.toContain("Confidence is High");
 
     const html = renderToStaticMarkup(createElement(ConsumerResultPanel, {
       consumerResult: redacted,
       productId: PRODUCT_ID,
     }));
-    expect(html).toContain(warning);
-    expect(html).toContain("92 evidence quality");
+    const signalStart = html.indexOf('data-signal-quality=""');
+    const signalEnd = html.indexOf('data-evidence-coverage=""');
+    const signalCard = html.slice(signalStart, signalEnd);
+    expect(signalCard).toContain(">92<");
+    expect(signalCard).not.toMatch(/\bGood\b|\bHigh\b/);
+    expect(html).toContain("SIGNAL QUALITY");
+    expect(html).toContain("EVIDENCE COVERAGE");
+    expect(html).toContain("37%");
+    expect(html).not.toContain(warning);
     expect(html).not.toContain("Confidence is High");
+    expect(html).not.toContain("92 evidence quality");
   });
 
   it("still returns unavailable evidence when the provider fails, without an invented score", async () => {
