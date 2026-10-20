@@ -10,6 +10,12 @@ alpha. It does not describe a public or multi-replica deployment.
   processes are never active at the same time.
 - Build with `npm run build` and start with `npm start`. Vite preview is not the
   production server.
+- `PORT` defaults to 3000. Leave `HOST` unset to listen on all interfaces, which
+  is the previous behavior. Set `HOST=127.0.0.1` when the edge proxy on the same
+  machine forwards to loopback, so the Node process does not accept connections
+  on other interfaces. A blank `HOST` is invalid and the process will refuse to
+  start. `HOST` is an address only (for example `127.0.0.1` or `::1`), with no
+  scheme or port.
 - Terminate HTTPS at the deployment edge.
 - Require the deployment platform's password gate before both the static UI and
   every API route. Disable any direct-origin URL that bypasses that gate.
