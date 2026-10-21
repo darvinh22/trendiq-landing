@@ -74,16 +74,34 @@ export async function handleProductAnalysisHttpRequest(
   return true;
 }
 
-function headerValue(request: IncomingMessage, name: string): string {
+function headerValue(request: { headers: IncomingMessage["headers"] }, name: string): string {
   const raw = request.headers[name];
   const value = Array.isArray(raw) ? raw[0] : raw;
   return value?.split(",")[0]?.trim() ?? "";
 }
 
-function clientIdentity(request: IncomingMessage): string {
-  const email = headerValue(request, "cf-access-authenticated-user-email");
-  if (email) return email;
-  const forwarded = headerValue(request, "x-forwarded-for");
-  if (forwarded) return forwarded;
-  return request.socket?.remoteAddress || "anonymous";
+const LOOPBACK_PEERS = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
+
+/**
+ * Client key for open-analysis rate limits.
+ *
+ * The trusted proxy is the same-host reverse proxy that connects to this
+ * process on loopback (`HOST=127.0.0.1` or `::1`). That proxy must strip any
+ * inbound `cf-access-authenticated-user-email` and set the header itself from
+ * the edge access gate. Node trusts the header only when the TCP peer is
+ * loopback. `x-forwarded-for` is never a client identity: a caller who rotates
+ * it must not receive a new rate-limit bucket. A non-loopback peer is keyed
+ * only by its socket address, and both of those headers are ignored.
+ */
+export function clientIdentity(request: {
+  headers: IncomingMessage["headers"];
+  socket?: { remoteAddress?: string | null };
+}): string {
+  const peer = request.socket?.remoteAddress?.trim() || "";
+  if (LOOPBACK_PEERS.has(peer)) {
+    const email = headerValue(request, "cf-access-authenticated-user-email").toLowerCase();
+    if (email) return `access:${email}`;
+    return `peer:${peer}`;
+  }
+  return `peer:${peer || "anonymous"}`;
 }

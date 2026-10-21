@@ -89,4 +89,43 @@ describe("ray-ban-meta flow with open analysis present", () => {
       expect(fetchImpl).not.toHaveBeenCalled();
     }
   });
+
+  it("keeps the ray-ban-meta contract when analysis is disabled", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "trendiq-rayban-off-"));
+    dirs.push(dataDir);
+    const collect = vi.fn(async () => {
+      throw new Error("collector_must_not_run");
+    });
+    const fetchImpl = vi.fn(async () => {
+      throw new Error("live_network_forbidden");
+    });
+    const disabled = createProductAnalysisRuntime({
+      env: {
+        ...readyEnv(dataDir, true),
+        TRENDIQ_ANALYSIS_ENABLED: "false",
+      },
+      assetsReady: () => true,
+      evidenceCollector: { collect } as unknown as AnalysisEvidenceCollector,
+      fetchImpl,
+      now: () => new Date("2026-10-21T00:00:00.000Z"),
+    });
+    expect(getControlledProductCatalog().products.map((product) => product.productId)).toEqual(["ray-ban-meta"]);
+    const started = handleProductAnalysisApiRequest({
+      method: "POST",
+      pathname: "/api/product-analysis",
+      body: { productId: "ray-ban-meta" },
+    }, disabled);
+    expect(started).toEqual({ statusCode: 503, body: { status: "unavailable", reason: "analysis_disabled" } });
+    const unknown = handleProductAnalysisApiRequest({
+      method: "POST",
+      pathname: "/api/product-analysis",
+      body: { productId: "oura-ring" },
+    }, disabled);
+    expect(unknown).toEqual({
+      statusCode: 404,
+      body: { status: "unavailable", reason: "product_not_supported" },
+    });
+    expect(collect).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
 });

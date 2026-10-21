@@ -93,10 +93,21 @@ export interface SpendReservation {
   ok: boolean;
   id?: string;
   micros: number;
+  /** Which limit rejected the reservation. Absent when the reservation is held. */
+  reason?: "cycle" | "daily";
+}
+
+export interface SpendReserveContext {
+  /** One resolution plus its later analysis. Both calls share this id. */
+  cycleId: string;
 }
 
 export interface AnalysisSpendLedger {
-  reserve(micros: number, now: Date): Promise<SpendReservation>;
+  reserve(micros: number, now: Date, context?: SpendReserveContext): Promise<SpendReservation>;
+  /**
+   * `now` is the response time. The ledger must adjust the UTC day stored on
+   * the reservation, not the day `now` falls on.
+   */
   reconcile(id: string, actualMicros: number, now: Date): Promise<void>;
 }
 
@@ -108,9 +119,11 @@ export interface AnalysisSpendTracker {
 }
 
 export function createAnalysisSpendTracker(options: {
+  /** Local ceiling for this tracker. The shared ledger is still the authority across calls. */
   maxMicros: number;
   ledger: AnalysisSpendLedger;
   now: () => Date;
+  cycleId: string;
 }): AnalysisSpendTracker {
   let spentMicros = 0;
   let exceeded = false;
@@ -134,11 +147,14 @@ export function createAnalysisSpendTracker(options: {
           exceeded = true;
           throw new Error("controlled_spend_cap_exceeded");
         }
-        const reservation = await options.ledger.reserve(estimate, options.now());
+        const reservedAt = options.now();
+        const reservation = await options.ledger.reserve(estimate, reservedAt, { cycleId: options.cycleId });
         if (!reservation.ok || !reservation.id) {
           exceeded = true;
-          dailyBlocked = true;
-          throw new Error("controlled_daily_spend_cap_exceeded");
+          dailyBlocked = reservation.reason !== "cycle";
+          throw new Error(reservation.reason === "cycle"
+            ? "controlled_spend_cap_exceeded"
+            : "controlled_daily_spend_cap_exceeded");
         }
         try {
           const response = await replayResponse(await fetchImpl(url, init));
@@ -149,10 +165,16 @@ export function createAnalysisSpendTracker(options: {
           return response;
         } catch (error) {
           const message = error instanceof Error ? error.message : "";
-          if (message !== "controlled_spend_cap_exceeded" && message !== "controlled_daily_spend_cap_exceeded") {
-            await options.ledger.reconcile(reservation.id, estimate, options.now());
+          if (
+            message !== "controlled_spend_cap_exceeded" &&
+            message !== "controlled_daily_spend_cap_exceeded" &&
+            message !== "process_paid_operation_ceiling_exhausted"
+          ) {
+            await options.ledger.reconcile(reservation.id, estimate, reservedAt);
             spentMicros += estimate;
             exceeded = true;
+          } else if (message === "process_paid_operation_ceiling_exhausted") {
+            await options.ledger.reconcile(reservation.id, 0, reservedAt);
           }
           throw error;
         }
@@ -273,9 +295,10 @@ export function estimateOpenAnalysisSpend(): OpenAnalysisSpendEstimate {
       "Estimate from the code paths in productionEvidenceCollector and the resolve shopping search, priced from public DataForSEO list pages. Not a bill.",
       "Task GET polls reserve $0 and then add the response cost field when present.",
       "Errors and thrown calls reserve the list-price estimate so retries and failures still count.",
-      "A call is not started when its estimate would pass $0.15 for that analysis or $3 for the UTC day. One in-flight response can exceed the cap only by the gap between estimate and the returned cost.",
-      "The $0.15 cap is per analysis. The resolve call counts against the $3 daily cap and is limited to one paid POST.",
-      "Google Ads live is also documented at 12 requests per minute per account. This process does not try to exceed that; the daily dollar cap is the hard stop.",
+      "A call is not started unless the published list price still fits in both the resolution+analysis cycle ($0.15) and the UTC day the reservation is made ($3).",
+      "Resolve and analysis share one cycle ledger. There is no separate $0.002 allowance on top of $0.15.",
+      "Returned provider cost can exceed the published list price. That overage is recorded on the reservation's original UTC day and can put the cycle or the day above the limit. This is not a hard invoice cap. See docs/OPEN_ANALYSIS.md.",
+      "Google Ads live is also documented at 12 requests per minute per account. This process does not try to exceed that.",
     ],
   };
 }

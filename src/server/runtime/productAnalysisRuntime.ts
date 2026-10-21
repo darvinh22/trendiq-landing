@@ -156,6 +156,13 @@ export class ProductAnalysisRuntime implements OpenProductAnalysisApi {
       const password = this.env.DATAFORSEO_PASSWORD?.trim() ?? "";
       this.openService = new OpenAnalysisService({
         enabled: true,
+        analysisEnabled: this.config.analysisEnabled,
+        readiness: () => {
+          const ready = this.readiness();
+          return ready.status === "ready"
+            ? { status: "ready" as const }
+            : { status: "not_ready" as const, reason: ready.reason };
+        },
         dataDir: this.config.openAnalysisDataDir,
         now: this.now,
         clockMs: this.clockMs,

@@ -119,8 +119,12 @@ export class ProductionAnalysisEvidenceCollector implements AnalysisEvidenceColl
 
     if (shouldUseLiveSearch(searchConfig)) {
       try {
+        const confirmedProfile = profile.source === "resolved_provider" && /^open-[a-f0-9]{20}$/.test(profile.productId)
+          ? profile
+          : undefined;
         const searchResult = await runControlledLiveSearchToScore({
           query: profile.query,
+          ...(confirmedProfile ? { confirmedProfile } : {}),
           stateStore: executionState,
           searchConfig,
           searchClient: new DataForSeoTrendsClient(searchConfig, budget.fetch),
@@ -136,10 +140,12 @@ export class ProductionAnalysisEvidenceCollector implements AnalysisEvidenceColl
             .map((step) => createScopedSignalExecutionApproval({ plan, step, maxOperations: 1 })),
         });
 
-        if (
+        const identityHeld =
           searchResult.resolution.profile.productId === profile.productId &&
-          searchResult.plan.product.productId === profile.productId
-        ) {
+          searchResult.plan.product.productId === profile.productId &&
+          searchResult.snapshot.productId === profile.productId &&
+          searchResult.rawSignals.every((signal) => signal.productId === profile.productId);
+        if (identityHeld) {
           signals.push(...searchResult.rawSignals);
           searchStatus = searchResult.executionResults.some((result) => result.status === "completed")
             ? "completed"

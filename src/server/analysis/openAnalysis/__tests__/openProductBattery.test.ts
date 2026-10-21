@@ -51,6 +51,7 @@ describe("open product battery v1", () => {
       const dataDir = await tempDir();
       const service = new OpenAnalysisService({
         enabled: true,
+        analysisEnabled: true,
         dataDir,
         now: () => new Date("2026-10-21T00:00:00.000Z"),
         searchCandidates: async (query) => {

@@ -49,8 +49,14 @@ resets the process-lifetime paid-operation counter.
 ## Kill switch and cost ceiling
 
 To stop new provider work, set `TRENDIQ_ANALYSIS_ENABLED=false` and perform a
-graceful restart. The catalog remains available, but analysis starts return a
-safe disabled state and readiness fails closed.
+graceful restart. The catalog remains available, but analysis starts and
+free-text name resolution return a safe disabled state and readiness fails
+closed. Neither path calls a provider while that switch is false.
+
+The same-host proxy is the only trusted client-identity hop. Run with
+`HOST=127.0.0.1` so only that proxy can connect. The proxy must overwrite
+`cf-access-authenticated-user-email` and must not let a client-supplied
+`x-forwarded-for` become the rate-limit key. See `docs/OPEN_ANALYSIS.md`.
 
 When the process paid-operation ceiling is exhausted, readiness fails and new
 analysis starts are rejected before provider work. Raising the configured

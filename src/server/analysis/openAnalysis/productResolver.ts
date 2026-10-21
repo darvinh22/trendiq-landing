@@ -118,8 +118,16 @@ const PROHIBITED_QUERY = new RegExp(
   "i"
 );
 
+/**
+ * Cache key for a shopper query. The full NFKC text is kept, then whitespace is
+ * collapsed and ASCII case is folded. Stripping to ASCII would map distinct
+ * non-Latin queries onto one empty key. Compatibility forms such as fullwidth
+ * digits fold together. Letters that only look similar, such as Latin and
+ * Cyrillic, stay different.
+ */
 export function queryHash(query: string): string {
-  return sha256(normalize(query));
+  const folded = query.normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase();
+  return sha256(folded);
 }
 
 export function decideIdentity(input: {

@@ -64,7 +64,13 @@ export type ProductResolveResponse =
   | { status: "abstain"; reason: OpenAbstainPublicReason; message: string }
   | {
       status: "unavailable";
-      reason: "open_analysis_disabled" | "daily_capacity_reached" | "rate_limited" | "runtime_not_ready";
+      reason:
+        | "analysis_disabled"
+        | "open_analysis_disabled"
+        | "daily_capacity_reached"
+        | "process_paid_operation_ceiling_exhausted"
+        | "rate_limited"
+        | "runtime_not_ready";
     }
   | { status: "error"; reason: "invalid_request" | "analysis_failed" };
 
@@ -233,8 +239,10 @@ export function parseProductResolveResponse(value: unknown): ProductResolveRespo
   if (value.status === "unavailable") {
     if (!hasExactKeys(value, ["reason", "status"])) return null;
     if (
+      value.reason !== "analysis_disabled" &&
       value.reason !== "open_analysis_disabled" &&
       value.reason !== "daily_capacity_reached" &&
+      value.reason !== "process_paid_operation_ceiling_exhausted" &&
       value.reason !== "rate_limited" &&
       value.reason !== "runtime_not_ready"
     ) return null;

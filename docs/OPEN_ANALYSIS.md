@@ -8,20 +8,49 @@ The switch `TRENDIQ_OPEN_ANALYSIS_ENABLED` defaults to false. While it is false
 the server does not create the data file and does not call a provider for
 `POST /api/product-resolve`.
 
+## Switches
+
+Both `TRENDIQ_ANALYSIS_ENABLED=true` and `TRENDIQ_OPEN_ANALYSIS_ENABLED=true`
+are required before a name resolution or an open analysis calls a provider.
+Readiness, the process paid-operation ceiling, live provider configuration,
+credentials, the approved DataForSEO origin, and a writable data directory are
+checked first. The identity shopping task also reserves one process
+paid-operation. `TRENDIQ_ANALYSIS_ENABLED=false` stops new provider work,
+including name resolution.
+
 ## Caps
 
-All provider calls, errors, and retries count.
+All provider calls, errors, and retries count. Resolve and analysis share one
+cycle ledger. There is no separate identity allowance on top of the cycle limit.
 
-- $0.15 maximum for one analysis.
-- $3 maximum for one UTC day, including the identity search.
+- $0.15 maximum for one resolution plus its analysis.
+- $3 maximum for one UTC day.
 - 100 name resolutions per UTC day, 5 analyses per client per hour, 20 per
   client per day, and one analysis in flight per client.
-- A call is not started when its list-price estimate would pass either dollar
-  cap. One response already in flight can exceed a cap only by the gap between
-  that estimate and the returned `cost`.
+- This deployment is one Node process and one replica. The file lock is the
+  concurrency control.
 
-Published list prices checked on 2026-10-20, used only when a response omits
-`cost` or the call errors. This is an estimate, not a bill.
+### What the money control guarantees
+
+Before a call, the process atomically reserves the published list price for
+that request. The reservation is refused when it would put the cycle over
+$0.15 or the UTC day of the reservation over $3. The reservation stays on that
+UTC day. A response that arrives after midnight is reconciled to the same day.
+A thrown call, an HTTP error, or a crash keeps the reservation. It is not
+refunded and it is not moved to the next day.
+
+This is not a hard invoice cap. DataForSEO can return a `cost` higher than the
+published list price for the same request. That higher amount is recorded after
+the call and can put the cycle or the day above the limit. There is no
+published pre-call maximum that the provider promises not to exceed.
+
+Product Owner decision still required: accept this published-list-price
+pre-authorization, and leave the open-analysis switch off until that residual
+overage is an accepted risk, or keep the switch off until DataForSEO exposes a
+pre-call maximum. The switch stays false in this repository.
+
+Published list prices checked on 2026-10-20, used when a response omits `cost`
+or the call errors. This is an estimate, not a bill.
 
 | Call | Estimate |
 | --- | --- |
@@ -31,9 +60,21 @@ Published list prices checked on 2026-10-20, used only when a response omits
 | Shopping products task inside reviews | $0.002 |
 | Shopping reviews at recent depth 200 | $0.03 |
 
-A typical full cycle is about $0.1252. At that estimate the $3 day cap allows
-23 full cycles. Ads search volume is most of the cost. The code records the
-same figures from `estimateOpenAnalysisSpend()`.
+A typical full cycle is about $0.1252, including the $0.002 identity task.
+At that estimate the $3 day cap allows 23 full cycles. Ads search volume is
+most of the cost. The code records the same figures from
+`estimateOpenAnalysisSpend()`.
+
+Identity search posts one Shopping products task, then polls `task_get` with
+the same attempt count and wait as the reviews client. A task that is still
+queued is not treated as "not found". The poll does not post a second task.
+
+## Client rate-limit identity
+
+The trusted proxy is the same-host reverse proxy that connects to Node on
+loopback. It must strip any inbound `cf-access-authenticated-user-email` and
+set that header itself. Node reads the header only when the TCP peer is
+loopback. `x-forwarded-for` is never the client key.
 
 ## Cache
 

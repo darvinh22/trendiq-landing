@@ -15,12 +15,13 @@ import {
 } from "../costAccounting";
 import { OpenAnalysisFileStore, STORE_FILE_NAME } from "../fileStore";
 import { OpenAnalysisService } from "../openAnalysisService";
-import { isProhibitedQuery, readShoppingCandidates, sanitizeProductQuery } from "../productResolver";
+import { isProhibitedQuery, queryHash, readShoppingCandidates, sanitizeProductQuery } from "../productResolver";
 import { searchShoppingIdentity } from "../shoppingIdentitySearch";
 
 const tempDirs: string[] = [];
 
 afterEach(async () => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
@@ -78,6 +79,7 @@ describe("open analysis spend caps", () => {
       maxMicros: OPEN_ANALYSIS_MAX_MICROS,
       ledger,
       now: () => new Date("2026-10-21T00:00:00.000Z"),
+      cycleId: "cycle_tracker",
     });
     const urls: string[] = [];
     const fetchImpl = tracker.wrap(async (url) => {
@@ -96,6 +98,7 @@ describe("open analysis spend caps", () => {
       maxMicros: OPEN_ANALYSIS_MAX_MICROS,
       ledger: failing,
       now: () => new Date("2026-10-21T00:00:00.000Z"),
+      cycleId: "cycle_error",
     });
     const wrapped = errorTracker.wrap(async () => {
       throw new Error("socket_reset");
@@ -122,6 +125,7 @@ describe("open analysis spend caps", () => {
     });
     const service = new OpenAnalysisService({
       enabled: true,
+      analysisEnabled: true,
       dataDir,
       now: () => now,
       fetchImpl,
@@ -142,6 +146,7 @@ describe("open analysis spend caps", () => {
     });
     const service = new OpenAnalysisService({
       enabled: true,
+      analysisEnabled: true,
       dataDir,
       now: () => new Date("2026-10-21T12:00:00.000Z"),
       fetchImpl,
@@ -232,6 +237,7 @@ describe("identity cache, price ttl, and analysis abstention", () => {
     let sequence = 0;
     const service = new OpenAnalysisService({
       enabled: true,
+      analysisEnabled: true,
       dataDir,
       now: () => now,
       jobDeadlineMs: 2_000,
@@ -303,6 +309,7 @@ describe("identity cache, price ttl, and analysis abstention", () => {
     let sequence = 0;
     const service = new OpenAnalysisService({
       enabled: true,
+      analysisEnabled: true,
       dataDir,
       now: () => now,
       idFactory: () => `analysis_${String(++sequence).padStart(8, "0")}`,
@@ -360,6 +367,7 @@ describe("identity cache, price ttl, and analysis abstention", () => {
     });
     const service = new OpenAnalysisService({
       enabled: true,
+      analysisEnabled: true,
       dataDir,
       now: () => new Date("2026-10-21T00:00:00.000Z"),
       searchCandidates: searches,
@@ -384,9 +392,15 @@ describe("shopping identity request shape", () => {
     const fetchImpl: FetchLike = async (url, init) => {
       calls.push({ url, init });
       if (init?.method === "POST") {
-        return jsonResponse({ cost: 0, tasks: [{ id: "task_fixture_1", cost: 0 }] });
+        return jsonResponse({ cost: 0, tasks: [{ id: "task_fixture_1", status_code: 20100, cost: 0 }] });
       }
-      return jsonResponse(clearProduct("kindle-paperwhite").providerResponse);
+      const payload = structuredClone(clearProduct("kindle-paperwhite").providerResponse) as {
+        status_code?: number;
+        tasks: Array<{ id?: string; status_code: number; cost: 0; result: unknown }>;
+      };
+      payload.status_code = 20000;
+      payload.tasks[0].id = "task_fixture_1";
+      return jsonResponse(payload);
     };
     const ledger = memoryLedger();
     const candidates = await searchShoppingIdentity({
@@ -397,7 +411,9 @@ describe("shopping identity request shape", () => {
       fetchImpl,
       ledger,
       now: () => new Date("2026-10-21T00:00:00.000Z"),
+      cycleId: "cycle_kindle",
       allowPaidCall: true,
+      pollIntervalMs: 0,
     });
     expect(candidates.length).toBeGreaterThan(0);
     const posts = calls.filter((call) => call.init?.method === "POST");
@@ -408,6 +424,203 @@ describe("shopping identity request shape", () => {
     expect(body).toHaveLength(1);
     expect(body[0]).toMatchObject({ keyword: "Kindle Paperwhite", depth: 40, priority: 1 });
     expect(ledger.micros).toBe(0);
+  });
+});
+
+describe("query identity and shopping polls", () => {
+  it("keeps distinct unicode queries distinct and folds compatibility characters", () => {
+    expect(queryHash("ヘッドホン")).not.toBe(queryHash("耳机"));
+    expect(queryHash("ソニー WH-1000XM5")).not.toBe(queryHash("ヘッドホン"));
+    expect(queryHash("Sony WH-1000XM5")).toBe(queryHash("sony  wh-1000xm５"));
+    expect(queryHash("Ray-Ban")).not.toBe(queryHash("Ray-B\u0430n"));
+  });
+
+  it("waits out a pending shopping task and does not report it as empty", async () => {
+    vi.useFakeTimers();
+    const methods: string[] = [];
+    const fetchImpl: FetchLike = async (_url, init) => {
+      methods.push(init?.method ?? "GET");
+      if (init?.method === "POST") {
+        return jsonResponse({
+          status_code: 20000,
+          cost: 0,
+          tasks: [{ id: "task_pending_1", status_code: 20100, cost: 0 }],
+        });
+      }
+      return jsonResponse({
+        status_code: 20000,
+        cost: 0,
+        tasks: [{ id: "task_pending_1", status_code: 40602, status_message: "Task In Queue.", cost: 0 }],
+      });
+    };
+    const pending = searchShoppingIdentity({
+      query: "Kindle Paperwhite",
+      apiBaseUrl: "https://fixture.invalid",
+      login: "fixture-login",
+      password: "fixture-password",
+      fetchImpl,
+      ledger: memoryLedger(),
+      now: () => new Date("2026-10-21T00:00:00.000Z"),
+      cycleId: "cycle_pending",
+      allowPaidCall: true,
+      pollAttempts: 3,
+      pollIntervalMs: 1_000,
+    });
+    const settled = expect(pending).rejects.toThrow("shopping_identity_pending");
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await settled;
+    expect(methods.filter((method) => method === "POST")).toEqual(["POST"]);
+    expect(methods.filter((method) => method === "GET")).toHaveLength(3);
+    vi.useRealTimers();
+  });
+
+  it("reconciles a reservation onto the UTC day it was made", async () => {
+    const dataDir = await tempDir();
+    let now = new Date("2026-10-21T23:59:00.000Z");
+    const fetchImpl: FetchLike = async (_url, init) => {
+      if (init?.method === "POST") {
+        now = new Date("2026-10-22T00:01:00.000Z");
+        throw new Error("provider_down");
+      }
+      throw new Error("must_not_poll");
+    };
+    const service = new OpenAnalysisService({
+      enabled: true,
+      analysisEnabled: true,
+      dataDir,
+      now: () => now,
+      fetchImpl,
+      apiBaseUrl: "https://fixture.invalid",
+      login: "fixture-login",
+      password: "fixture-password",
+      liveConfigured: true,
+    });
+    const failed = await service.resolveOpenProduct({ query: "Sony WH-1000XM5" });
+    expect(failed.statusCode).toBe(503);
+    const document = await new OpenAnalysisFileStore(dataDir, { now: () => now }).read();
+    expect(document.spendByDay["2026-10-21"]?.micros).toBe(2_000);
+    expect(document.spendByDay["2026-10-22"]?.micros ?? 0).toBe(0);
+  });
+
+  it("lets only one of two concurrent resolves reserve the last daily dollar", async () => {
+    const dataDir = await tempDir();
+    const now = new Date("2026-10-21T12:00:00.000Z");
+    const seeded = new OpenAnalysisFileStore(dataDir, { now: () => now });
+    await seeded.update((document) => {
+      document.spendByDay["2026-10-21"] = {
+        micros: OPEN_ANALYSIS_DAILY_MAX_MICROS - 2_000,
+        reservations: {},
+        analysisCount: 0,
+        paidOperationCount: 0,
+      };
+    });
+    const posts: string[] = [];
+    const fetchImpl: FetchLike = async (_url, init) => {
+      if (init?.method === "POST") {
+        posts.push("POST");
+        return jsonResponse({
+          status_code: 20000,
+          cost: 0.002,
+          tasks: [{ id: "task_race_1", status_code: 20100, cost: 0.002 }],
+        });
+      }
+      return jsonResponse({
+        status_code: 20000,
+        cost: 0,
+        tasks: [{ id: "task_race_1", status_code: 20000, cost: 0, result: [{ items: [] }] }],
+      });
+    };
+    const service = new OpenAnalysisService({
+      enabled: true,
+      analysisEnabled: true,
+      dataDir,
+      now: () => now,
+      fetchImpl,
+      apiBaseUrl: "https://fixture.invalid",
+      login: "fixture-login",
+      password: "fixture-password",
+      liveConfigured: true,
+      pollIntervalMs: 0,
+      pollAttempts: 1,
+    });
+    const results = await Promise.all([
+      service.resolveOpenProduct({ query: "Sony WH-1000XM5", clientKey: "a" }),
+      service.resolveOpenProduct({ query: "Bose QuietComfort Ultra", clientKey: "b" }),
+    ]);
+    expect(posts).toEqual(["POST"]);
+    const blocked = results.filter((result) => result.body.status === "unavailable");
+    expect(blocked.length).toBeGreaterThanOrEqual(1);
+    const document = await seeded.read();
+    expect(document.spendByDay["2026-10-21"]?.micros).toBeLessThanOrEqual(OPEN_ANALYSIS_DAILY_MAX_MICROS);
+  });
+});
+
+describe("shared resolution and analysis cycle", () => {
+  it("does not give analysis a fresh $0.15 after identity spend", async () => {
+    const dataDir = await tempDir();
+    const urls: string[] = [];
+    const fetchImpl: FetchLike = async (url, init) => {
+      urls.push(String(url));
+      if (init?.method === "POST" && String(url).includes("products/task_post")) {
+        return jsonResponse({
+          status_code: 20000,
+          cost: 0.149,
+          tasks: [{ id: "task_cycle_1", status_code: 20100, cost: 0.149 }],
+        });
+      }
+      if (init?.method === "GET") {
+        const payload = structuredClone(clearProduct("sony-wh-1000xm5").providerResponse) as {
+          status_code?: number;
+          cost: number;
+          tasks: Array<{ id?: string }>;
+        };
+        payload.status_code = 20000;
+        payload.cost = 0;
+        payload.tasks[0].id = "task_cycle_1";
+        return jsonResponse(payload);
+      }
+      throw new Error(`analysis_provider_must_not_start ${url}`);
+    };
+    const service = new OpenAnalysisService({
+      enabled: true,
+      analysisEnabled: true,
+      dataDir,
+      now: () => new Date("2026-10-21T00:00:00.000Z"),
+      idFactory: () => "analysis_sharedcycle01",
+      fetchImpl,
+      apiBaseUrl: "https://fixture.invalid",
+      login: "fixture-login",
+      password: "fixture-password",
+      liveConfigured: true,
+      pollAttempts: 1,
+      pollIntervalMs: 0,
+      env: {
+        TRENDIQ_SEARCH_MODE: "live",
+        TRENDIQ_SEARCH_PROVIDER: "dataforseo",
+        TRENDIQ_REVIEWS_MODE: "mock",
+        TRENDIQ_REVIEWS_PROVIDER: "dataforseo",
+        DATAFORSEO_LOGIN: "fixture-login",
+        DATAFORSEO_PASSWORD: "fixture-password",
+        DATAFORSEO_API_BASE_URL: "https://fixture.invalid",
+      },
+    });
+    const resolved = await service.resolveOpenProduct({ query: clearProduct("sony-wh-1000xm5").query, clientKey: "client-a" });
+    expect(resolved.body.status).toBe("resolved");
+    if (resolved.body.status !== "resolved") throw new Error("expected resolved");
+    const started = await service.analyzeResolution({ resolutionId: resolved.body.resolutionId, clientKey: "client-a" });
+    expect(started.status).toBe("pending");
+    if (started.status !== "pending") throw new Error("expected pending");
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const status = service.getAnalysisStatus(started.analysisId);
+      if (status && status.status !== "pending") break;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(urls.some((url) => url.includes("dataforseo_trends") || url.includes("google_ads"))).toBe(false);
+    const document = await new OpenAnalysisFileStore(dataDir).read();
+    const cycle = Object.values(document.cycles)[0];
+    expect(cycle?.micros).toBe(149_000);
+    expect(cycle?.micros).toBeLessThanOrEqual(OPEN_ANALYSIS_MAX_MICROS);
   });
 });
 

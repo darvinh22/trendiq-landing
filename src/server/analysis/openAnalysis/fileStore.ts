@@ -7,11 +7,26 @@ export const STORE_FILE_NAME = "open-analysis.json";
 const LOCK_STALE_MS = 60_000;
 const RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 
+export interface SpendReservationRecord {
+  micros: number;
+  createdAt: string;
+  /** UTC day the reservation was made. Reconciliation always adjusts this day. */
+  dayKey: string;
+  /** Resolution+analysis cycle this charge belongs to. */
+  cycleId: string;
+}
+
 export interface DaySpend {
   micros: number;
-  reservations: Record<string, { micros: number; createdAt: string }>;
+  reservations: Record<string, SpendReservationRecord>;
   analysisCount: number;
   paidOperationCount: number;
+}
+
+export interface CycleSpend {
+  /** UTC day of the first reservation in the cycle. Later calls may fall on another day. */
+  dayKey: string;
+  micros: number;
 }
 
 export interface ClientWindow {
@@ -26,6 +41,7 @@ export interface ClientWindow {
 export interface StoreDocument {
   version: typeof OPEN_ANALYSIS_STORE_VERSION;
   spendByDay: Record<string, DaySpend>;
+  cycles: Record<string, CycleSpend>;
   resolveCountByDay: Record<string, number>;
   clients: Record<string, ClientWindow>;
   resolutions: Record<string, unknown>;
@@ -40,6 +56,7 @@ export function emptyStoreDocument(): StoreDocument {
   return {
     version: OPEN_ANALYSIS_STORE_VERSION,
     spendByDay: {},
+    cycles: {},
     resolveCountByDay: {},
     clients: {},
     resolutions: {},
@@ -49,6 +66,11 @@ export function emptyStoreDocument(): StoreDocument {
     resultsByIdentity: {},
     jobs: {},
   };
+}
+
+function normalizeDocument(document: StoreDocument): StoreDocument {
+  if (!document.cycles) document.cycles = {};
+  return document;
 }
 
 function isDocument(value: unknown): value is StoreDocument {
@@ -114,12 +136,8 @@ function recoverInFlight(document: StoreDocument, now: Date, jobDeadlineMs: numb
     client.inFlightAnalysisId = null;
     client.inFlightSince = null;
   }
-  for (const day of Object.values(document.spendByDay)) {
-    for (const [id, reservation] of Object.entries(day.reservations)) {
-      const created = Date.parse(reservation.createdAt);
-      if (!Number.isFinite(created) || created <= cutoff) delete day.reservations[id];
-    }
-  }
+  // Reservations stay in place after a crash or deadline. The reserved amount
+  // remains on its original UTC day until that same reservation is reconciled.
 }
 
 function prune(document: StoreDocument, now: Date): void {
@@ -165,7 +183,7 @@ async function loadDocument(directory: string): Promise<StoreDocument> {
   try {
     const parsed = JSON.parse(await readFile(finalPath, "utf8")) as unknown;
     if (!isDocument(parsed)) throw new Error("open_analysis_store_unreadable");
-    return parsed;
+    return normalizeDocument(parsed);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === "ENOENT") return emptyStoreDocument();
@@ -192,7 +210,7 @@ async function recoverTemp(directory: string, finalPath: string): Promise<StoreD
         continue;
       }
       const info = await stat(full);
-      parsedTemps.push({ name, mtimeMs: info.mtimeMs, document: parsed });
+      parsedTemps.push({ name, mtimeMs: info.mtimeMs, document: normalizeDocument(parsed) });
     } catch {
       await rm(full, { force: true });
     }
