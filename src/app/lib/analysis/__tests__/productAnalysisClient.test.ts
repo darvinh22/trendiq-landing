@@ -61,6 +61,23 @@ describe("product analysis browser client", () => {
     });
   });
 
+  it("sends a name check and a chosen resolution without extra fields", async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ status: "abstain", reason: "not_found", message: "We can't identify this product reliably." }));
+    vi.stubGlobal("fetch", fetchMock);
+    await productAnalysisClient.resolve?.("Example Headphones");
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({ query: "Example Headphones" });
+
+    const resolutionId = `resolution_${"a".repeat(32)}`;
+    const candidateId = `cand_${"b".repeat(16)}`;
+    fetchMock.mockResolvedValueOnce(jsonResponse({ status: "pending", analysisId: "analysis_fixture123" }));
+    await productAnalysisClient.startResolved?.({ resolutionId });
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toEqual({ resolutionId });
+
+    fetchMock.mockResolvedValueOnce(jsonResponse({ status: "pending", analysisId: "analysis_fixture123" }));
+    await productAnalysisClient.startResolved?.({ resolutionId, candidateId });
+    expect(Object.keys(JSON.parse(String(fetchMock.mock.calls[2]?.[1]?.body))).sort()).toEqual(["candidateId", "resolutionId"]);
+  });
+
   it("rejects catalog records with any extra or unsafe field", () => {
     expect(parseControlledProductCatalogResponse({
       ...catalog,

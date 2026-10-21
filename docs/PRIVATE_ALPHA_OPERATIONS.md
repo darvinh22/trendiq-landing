@@ -82,3 +82,26 @@ to bypass the paid-operation ceiling.
 - A browser polling timeout or server job deadline never starts a second
   analysis automatically. Results remain degraded or unavailable rather than
   being fabricated.
+
+## Open product analysis data directory
+
+Free-text analysis stays off until `TRENDIQ_OPEN_ANALYSIS_ENABLED=true`. The
+Ray-Ban Meta catalog, its in-memory jobs, and `TRENDIQ_ANALYSIS_ENABLED` do not
+change when that flag is false.
+
+Before turning the flag on, an operator with root on the host must create the
+data directory and give the service user write access. The application does not
+do this itself:
+
+```text
+sudo mkdir -p /var/lib/trendiq
+sudo chown <service-user>:<service-group> /var/lib/trendiq
+sudo chmod 750 /var/lib/trendiq
+```
+
+Set `TRENDIQ_DATA_DIR=/var/lib/trendiq`. The process then creates
+`open-analysis.json` with atomic writes. If the directory is not writable, open
+analysis fails closed and does not call a provider. Leave the flag false until
+that directory exists. Spend counters, identity cache, and open-analysis jobs
+live in that file. Ray-Ban Meta jobs stay in memory and are still lost on
+restart. See `docs/OPEN_ANALYSIS.md`.

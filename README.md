@@ -22,3 +22,8 @@
   `127.0.0.1`) to bind one address; when `HOST` is unset, the process listens
   on all interfaces. It is not Vite preview. See `docs/PRIVATE_ALPHA_OPERATIONS.md`
   before allowing invited users to access it.
+
+  Free-text analysis of products outside the Ray-Ban Meta catalog is off unless
+  `TRENDIQ_OPEN_ANALYSIS_ENABLED=true`. That path has its own spend caps and a
+  file-backed store. See `docs/OPEN_ANALYSIS.md`. Affiliate programs are not
+  connected.

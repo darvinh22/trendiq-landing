@@ -37,6 +37,7 @@ export interface AnalysisEvidenceCollection {
 export interface AnalysisExecutionContext {
   canRequest?: () => boolean;
   onUsage?: (usage: ProviderRequestUsage) => void;
+  fetchImpl?: import("../../app/lib/data/search/client").FetchLike;
 }
 
 export interface AnalysisEvidenceCollector {
@@ -78,7 +79,7 @@ export class ProductionAnalysisEvidenceCollector implements AnalysisEvidenceColl
     now: () => Date,
     context: AnalysisExecutionContext = {}
   ): Promise<AnalysisEvidenceCollection> {
-    const fetchImpl = this.options.fetchImpl ?? runtimeFetch();
+    const fetchImpl = context.fetchImpl ?? this.options.fetchImpl ?? runtimeFetch();
     if (!fetchImpl) {
       return {
         productId: profile.productId,

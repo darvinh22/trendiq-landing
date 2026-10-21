@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { handleProductAnalysisApiRequest } from "../analysis/productAnalysisApi";
+import { dispatchProductAnalysisApi } from "../analysis/productAnalysisApi";
 import type { ProductAnalysisRuntime } from "./productAnalysisRuntime";
 
 export const MAX_ANALYSIS_BODY_BYTES = 4096;
@@ -51,20 +51,39 @@ export async function handleProductAnalysisHttpRequest(
     return true;
   }
 
-  if (pathname !== "/api/product-analysis" && !pathname.startsWith("/api/product-analysis/")) {
+  if (
+    pathname !== "/api/product-resolve" &&
+    pathname !== "/api/product-analysis" &&
+    !pathname.startsWith("/api/product-analysis/")
+  ) {
     return false;
   }
 
   try {
     const body = request.method === "POST" ? await readJsonBody(request) : undefined;
-    const result = handleProductAnalysisApiRequest({
+    const result = await dispatchProductAnalysisApi({
       method: request.method ?? "GET",
       pathname,
       body,
+      clientKey: clientIdentity(request),
     }, runtime);
     sendJson(response, result.statusCode, result.body);
   } catch {
     sendJson(response, 400, { status: "error", reason: "invalid_request" });
   }
   return true;
+}
+
+function headerValue(request: IncomingMessage, name: string): string {
+  const raw = request.headers[name];
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  return value?.split(",")[0]?.trim() ?? "";
+}
+
+function clientIdentity(request: IncomingMessage): string {
+  const email = headerValue(request, "cf-access-authenticated-user-email");
+  if (email) return email;
+  const forwarded = headerValue(request, "x-forwarded-for");
+  if (forwarded) return forwarded;
+  return request.socket?.remoteAddress || "anonymous";
 }

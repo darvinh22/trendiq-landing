@@ -1,0 +1,438 @@
+import { spawnSync } from "node:child_process";
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { FetchLike } from "../../../../app/lib/data/search/client";
+import { DATAFORSEO_GOOGLE_ADS_SEARCH_VOLUME_PATH } from "../../../../app/lib/data/search/client";
+import type { AnalysisEvidenceCollector } from "../../productionEvidenceCollector";
+import { OPEN_PRODUCT_BATTERY } from "../../fixtures/openProductBattery/v1/battery";
+import {
+  OPEN_ANALYSIS_DAILY_MAX_MICROS,
+  OPEN_ANALYSIS_MAX_MICROS,
+  createAnalysisSpendTracker,
+  type AnalysisSpendLedger,
+} from "../costAccounting";
+import { OpenAnalysisFileStore, STORE_FILE_NAME } from "../fileStore";
+import { OpenAnalysisService } from "../openAnalysisService";
+import { isProhibitedQuery, readShoppingCandidates, sanitizeProductQuery } from "../productResolver";
+import { searchShoppingIdentity } from "../shoppingIdentitySearch";
+
+const tempDirs: string[] = [];
+
+afterEach(async () => {
+  vi.restoreAllMocks();
+  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+});
+
+async function tempDir(): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), "trendiq-open-limits-"));
+  tempDirs.push(dir);
+  return dir;
+}
+
+function jsonResponse(body: unknown, ok = true) {
+  const text = JSON.stringify(body);
+  return {
+    ok,
+    status: ok ? 200 : 500,
+    json: async () => body,
+    text: async () => text,
+  };
+}
+
+function memoryLedger(): AnalysisSpendLedger & { micros: number; calls: number } {
+  const reservations = new Map<string, number>();
+  const ledger = {
+    micros: 0,
+    calls: 0,
+    async reserve(micros: number) {
+      ledger.calls += 1;
+      if (ledger.micros + micros > OPEN_ANALYSIS_DAILY_MAX_MICROS) return { ok: false, micros: 0 };
+      const id = `r${ledger.calls}`;
+      ledger.micros += micros;
+      reservations.set(id, micros);
+      return { ok: true, id, micros };
+    },
+    async reconcile(id: string, actualMicros: number) {
+      const reserved = reservations.get(id);
+      if (reserved === undefined) return;
+      ledger.micros += actualMicros - reserved;
+      if (ledger.micros < 0) ledger.micros = 0;
+      reservations.delete(id);
+    },
+  };
+  return ledger;
+}
+
+function clearProduct(id: string) {
+  const product = OPEN_PRODUCT_BATTERY.products.find((entry) => entry.id === id);
+  if (!product) throw new Error(id);
+  return product;
+}
+
+describe("open analysis spend caps", () => {
+  it("stops a second paid call that would pass $0.15 and counts a thrown call", async () => {
+    const ledger = memoryLedger();
+    const tracker = createAnalysisSpendTracker({
+      maxMicros: OPEN_ANALYSIS_MAX_MICROS,
+      ledger,
+      now: () => new Date("2026-10-21T00:00:00.000Z"),
+    });
+    const urls: string[] = [];
+    const fetchImpl = tracker.wrap(async (url) => {
+      urls.push(url);
+      return jsonResponse({ cost: 0.09, tasks: [{ cost: 0.09 }] });
+    });
+    const ads = `https://fixture.invalid${DATAFORSEO_GOOGLE_ADS_SEARCH_VOLUME_PATH}`;
+    await fetchImpl(ads, { method: "POST" });
+    await expect(fetchImpl(ads, { method: "POST" })).rejects.toThrow("controlled_spend_cap_exceeded");
+    expect(urls).toHaveLength(1);
+    expect(tracker.spentMicros).toBe(90_000);
+    expect(tracker.exceeded).toBe(true);
+
+    const failing = memoryLedger();
+    const errorTracker = createAnalysisSpendTracker({
+      maxMicros: OPEN_ANALYSIS_MAX_MICROS,
+      ledger: failing,
+      now: () => new Date("2026-10-21T00:00:00.000Z"),
+    });
+    const wrapped = errorTracker.wrap(async () => {
+      throw new Error("socket_reset");
+    });
+    await expect(wrapped(ads, { method: "POST" })).rejects.toThrow("socket_reset");
+    expect(failing.micros).toBe(90_000);
+    expect(errorTracker.exceeded).toBe(true);
+  });
+
+  it("blocks a resolve when the daily file counter is already $3", async () => {
+    const dataDir = await tempDir();
+    const now = new Date("2026-10-21T12:00:00.000Z");
+    const store = new OpenAnalysisFileStore(dataDir, { now: () => now });
+    await store.update((document) => {
+      document.spendByDay["2026-10-21"] = {
+        micros: OPEN_ANALYSIS_DAILY_MAX_MICROS,
+        reservations: {},
+        analysisCount: 0,
+        paidOperationCount: 0,
+      };
+    });
+    const fetchImpl = vi.fn<FetchLike>(async () => {
+      throw new Error("must_not_fetch");
+    });
+    const service = new OpenAnalysisService({
+      enabled: true,
+      dataDir,
+      now: () => now,
+      fetchImpl,
+      apiBaseUrl: "https://fixture.invalid",
+      login: "fixture-login",
+      password: "fixture-password",
+      liveConfigured: true,
+    });
+    const result = await service.resolveOpenProduct({ query: "Sony WH-1000XM5" });
+    expect(result).toEqual({ statusCode: 503, body: { status: "unavailable", reason: "daily_capacity_reached" } });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("keeps a failed call's estimate after a new store instance reads the file", async () => {
+    const dataDir = await tempDir();
+    const fetchImpl = vi.fn<FetchLike>(async () => {
+      throw new Error("provider_down");
+    });
+    const service = new OpenAnalysisService({
+      enabled: true,
+      dataDir,
+      now: () => new Date("2026-10-21T12:00:00.000Z"),
+      fetchImpl,
+      apiBaseUrl: "https://fixture.invalid",
+      login: "fixture-login",
+      password: "fixture-password",
+      liveConfigured: true,
+    });
+    const failed = await service.resolveOpenProduct({ query: "Sony WH-1000XM5" });
+    expect(failed.statusCode).toBe(503);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(String(fetchImpl.mock.calls[0]?.[0])).toContain("fixture.invalid");
+    expect(String(fetchImpl.mock.calls[0]?.[0])).not.toContain("api.dataforseo.com");
+
+    const restarted = new OpenAnalysisFileStore(dataDir);
+    const document = await restarted.read();
+    expect(document.spendByDay["2026-10-21"]?.micros).toBe(2_000);
+  });
+});
+
+describe("open analysis file store", () => {
+  it("does not lose parallel increments and steals a dead lock", async () => {
+    const dataDir = await tempDir();
+    const first = new OpenAnalysisFileStore(dataDir);
+    const second = new OpenAnalysisFileStore(dataDir);
+    await Promise.all(Array.from({ length: 20 }, (_, index) => {
+      const store = index % 2 === 0 ? first : second;
+      return store.update((document) => {
+        document.resolveCountByDay["2026-10-21"] = (document.resolveCountByDay["2026-10-21"] ?? 0) + 1;
+      });
+    }));
+    const after = await first.read();
+    expect(after.resolveCountByDay["2026-10-21"]).toBe(20);
+
+    const lockPath = join(dataDir, `${STORE_FILE_NAME}.lock`);
+    await writeFile(lockPath, JSON.stringify({ pid: 2_147_483_646, createdAt: new Date().toISOString() }));
+    await second.update((document) => {
+      document.resolveCountByDay["2026-10-21"] = (document.resolveCountByDay["2026-10-21"] ?? 0) + 1;
+    });
+    expect((await first.read()).resolveCountByDay["2026-10-21"]).toBe(21);
+    await expect(stat(lockPath)).rejects.toThrow();
+  });
+
+  it("promotes a valid temp file and refuses to zero a corrupt store", async () => {
+    const recoveredDir = await tempDir();
+    const recovered = {
+      version: 1,
+      spendByDay: { "2026-10-21": { micros: 123_000, reservations: {}, analysisCount: 0, paidOperationCount: 1 } },
+      resolveCountByDay: {},
+      clients: {},
+      resolutions: {},
+      identityByQuery: {},
+      specsByIdentity: {},
+      priceByIdentity: {},
+      resultsByIdentity: {},
+      jobs: {},
+    };
+    await writeFile(join(recoveredDir, `${STORE_FILE_NAME}.4242.abcd.tmp`), JSON.stringify(recovered));
+    const store = new OpenAnalysisFileStore(recoveredDir);
+    expect((await store.read()).spendByDay["2026-10-21"]?.micros).toBe(123_000);
+    expect((await readdir(recoveredDir)).some((name) => name.endsWith(".tmp"))).toBe(false);
+
+    const corruptDir = await tempDir();
+    const corruptPath = join(corruptDir, STORE_FILE_NAME);
+    await writeFile(corruptPath, "{");
+    const corrupt = new OpenAnalysisFileStore(corruptDir);
+    await expect(corrupt.read()).rejects.toThrow();
+    expect(await readFile(corruptPath, "utf8")).toBe("{");
+  });
+});
+
+describe("identity cache, price ttl, and analysis abstention", () => {
+  it("reuses identity for 30 days, marks price stale after 24 hours, and spends nothing on a cached analysis", async () => {
+    const dataDir = await tempDir();
+    let now = new Date("2026-10-01T00:00:00.000Z");
+    const searches: string[] = [];
+    let releaseCollect: (() => void) | undefined;
+    const collect = vi.fn(async (profile: { productId: string }) => {
+      if (releaseCollect) await new Promise<void>((resolve) => { releaseCollect = resolve; });
+      return {
+        productId: profile.productId,
+        searchStatus: "unavailable" as const,
+        reviewStatus: "unavailable" as const,
+        signals: [],
+        usage: { httpRequestCount: 0, paidOperationCount: 0, taskPostCount: 0 },
+      };
+    });
+    let sequence = 0;
+    const service = new OpenAnalysisService({
+      enabled: true,
+      dataDir,
+      now: () => now,
+      jobDeadlineMs: 2_000,
+      idFactory: () => `analysis_${String(++sequence).padStart(8, "0")}`,
+      evidenceCollector: { collect } as unknown as AnalysisEvidenceCollector,
+      searchCandidates: async (query) => {
+        searches.push(query);
+        const product = OPEN_PRODUCT_BATTERY.products.find((entry) => entry.query === query);
+        if (!product) throw new Error(query);
+        return readShoppingCandidates(product.providerResponse);
+      },
+    });
+
+    const sony = clearProduct("sony-wh-1000xm5");
+    const first = await service.resolveOpenProduct({ query: sony.query, clientKey: "client-a" });
+    expect(first.body.status).toBe("resolved");
+    if (first.body.status !== "resolved") throw new Error("expected resolved");
+    expect(first.body.priceStatus).toBe("fresh");
+    expect(first.body.evidenceDate).toContain("2026-10-01");
+    const second = await service.resolveOpenProduct({ query: sony.query, clientKey: "client-a" });
+    expect(second.body.status).toBe("resolved");
+    if (second.body.status === "resolved") expect(second.body.cached).toBe(true);
+    expect(searches).toHaveLength(1);
+
+    now = new Date("2026-10-02T00:00:01.000Z");
+    const stale = await service.resolveOpenProduct({ query: sony.query, clientKey: "client-a" });
+    expect(stale.body.status).toBe("resolved");
+    if (stale.body.status !== "resolved") throw new Error("expected resolved");
+    expect(stale.body.priceStatus).toBe("stale");
+    expect(stale.body.cached).toBe(true);
+    expect(searches).toHaveLength(1);
+
+    const started = await service.analyzeResolution({ resolutionId: first.body.resolutionId, clientKey: "client-a" });
+    expect(started.status).toBe("pending");
+    if (started.status !== "pending") throw new Error("expected pending");
+    const settled = await waitFor(service, started.analysisId);
+    expect(settled.status).toBe("completed");
+    if (settled.status === "completed") {
+      expect(settled.result.decision.recommendation).toBe("NO_RECOMMENDATION");
+      expect(settled.result.decision.summary.toLowerCase()).not.toContain("provider");
+      expect(JSON.stringify(settled.result.explanation.watchOuts)).toContain("Identity and specs evidence date");
+    }
+    expect(collect).toHaveBeenCalledTimes(1);
+
+    const cachedAnalysis = await service.analyzeResolution({ resolutionId: first.body.resolutionId, clientKey: "client-a" });
+    expect(cachedAnalysis.status).toBe("completed");
+    expect(collect).toHaveBeenCalledTimes(1);
+
+    now = new Date("2026-10-31T00:00:01.000Z");
+    await service.resolveOpenProduct({ query: sony.query, clientKey: "client-b" });
+    expect(searches).toHaveLength(2);
+  });
+
+  it("enforces hourly, daily, and in-flight analysis limits without a second live run", async () => {
+    const dataDir = await tempDir();
+    let now = new Date("2026-10-01T00:00:00.000Z");
+    let gate: Promise<void> = Promise.resolve();
+    let openGate = () => {};
+    const collect = vi.fn(async (profile: { productId: string }) => {
+      await gate;
+      return {
+        productId: profile.productId,
+        searchStatus: "unavailable" as const,
+        reviewStatus: "unavailable" as const,
+        signals: [],
+        usage: { httpRequestCount: 0, paidOperationCount: 0, taskPostCount: 0 },
+      };
+    });
+    let sequence = 0;
+    const service = new OpenAnalysisService({
+      enabled: true,
+      dataDir,
+      now: () => now,
+      idFactory: () => `analysis_${String(++sequence).padStart(8, "0")}`,
+      evidenceCollector: { collect } as unknown as AnalysisEvidenceCollector,
+      searchCandidates: async (query) => {
+        const product = OPEN_PRODUCT_BATTERY.products.find((entry) => entry.query === query);
+        if (!product) throw new Error(query);
+        return readShoppingCandidates(product.providerResponse);
+      },
+    });
+    const samsung = clearProduct("samsung-galaxy-s24");
+    const ambiguous = await service.resolveOpenProduct({ query: samsung.query, clientKey: "client-a" });
+    expect(ambiguous.body.status).toBe("ambiguous");
+    if (ambiguous.body.status !== "ambiguous") throw new Error("expected ambiguous");
+    const sony = await service.resolveOpenProduct({ query: clearProduct("sony-wh-1000xm5").query, clientKey: "client-a" });
+    const bose = await service.resolveOpenProduct({ query: clearProduct("bose-qc-ultra").query, clientKey: "client-a" });
+    if (sony.body.status !== "resolved" || bose.body.status !== "resolved") throw new Error("expected resolved");
+
+    gate = new Promise<void>((resolve) => { openGate = resolve; });
+    const first = await service.analyzeResolution({ resolutionId: sony.body.resolutionId, clientKey: "client-a" });
+    expect(first.status).toBe("pending");
+    const blocked = await service.analyzeResolution({ resolutionId: bose.body.resolutionId, clientKey: "client-a" });
+    expect(blocked).toEqual({ status: "unavailable", reason: "rate_limited" });
+    expect(collect).toHaveBeenCalledTimes(1);
+    openGate();
+    if (first.status === "pending") await waitFor(service, first.analysisId);
+
+    gate = Promise.resolve();
+    for (let hour = 0; hour < 4; hour += 1) {
+      now = new Date(Date.parse("2026-10-01T00:30:00.000Z") + hour * 60 * 60 * 1000);
+      for (let slot = 0; slot < 5; slot += 1) {
+        if (hour === 0 && slot === 0) continue;
+        const again = await service.analyzeResolution({ resolutionId: sony.body.resolutionId, clientKey: "client-a" });
+        expect(again.status).toBe("completed");
+      }
+    }
+    now = new Date("2026-10-01T04:30:00.000Z");
+    const overDay = await service.analyzeResolution({ resolutionId: sony.body.resolutionId, clientKey: "client-a" });
+    expect(overDay).toEqual({ status: "unavailable", reason: "rate_limited" });
+    expect(collect).toHaveBeenCalledTimes(1);
+
+    const picked = await service.analyzeResolution({
+      resolutionId: ambiguous.body.resolutionId,
+      candidateId: ambiguous.body.candidates[0]?.candidateId,
+      clientKey: "client-b",
+    });
+    expect(picked.status === "pending" || picked.status === "completed" || picked.status === "unavailable").toBe(true);
+    if (picked.status === "pending") await waitFor(service, picked.analysisId);
+  });
+
+  it("stops name checks at 100 per day and does not treat ordinary product words as prohibited", async () => {
+    const dataDir = await tempDir();
+    const searches = vi.fn(async () => {
+      throw new Error("must_not_search");
+    });
+    const service = new OpenAnalysisService({
+      enabled: true,
+      dataDir,
+      now: () => new Date("2026-10-21T00:00:00.000Z"),
+      searchCandidates: searches,
+    });
+    for (let index = 0; index < 100; index += 1) {
+      const result = await service.resolveOpenProduct({ query: "oxycodone tablets", clientKey: "client-a" });
+      expect(result.statusCode).toBe(200);
+      expect(result.body.status).toBe("abstain");
+    }
+    const blocked = await service.resolveOpenProduct({ query: "oxycodone tablets", clientKey: "client-a" });
+    expect(blocked).toEqual({ statusCode: 503, body: { status: "unavailable", reason: "daily_capacity_reached" } });
+    expect(searches).not.toHaveBeenCalled();
+    expect(isProhibitedQuery("prescription glasses")).toBe(false);
+    expect(isProhibitedQuery("glue gun")).toBe(false);
+    expect(sanitizeProductQuery("ab").ok).toBe(false);
+  });
+});
+
+describe("shopping identity request shape", () => {
+  it("posts one depth-40 priority-1 task to the injected host", async () => {
+    const calls: Array<{ url: string; init?: { method?: string; body?: string } }> = [];
+    const fetchImpl: FetchLike = async (url, init) => {
+      calls.push({ url, init });
+      if (init?.method === "POST") {
+        return jsonResponse({ cost: 0, tasks: [{ id: "task_fixture_1", cost: 0 }] });
+      }
+      return jsonResponse(clearProduct("kindle-paperwhite").providerResponse);
+    };
+    const ledger = memoryLedger();
+    const candidates = await searchShoppingIdentity({
+      query: "Kindle Paperwhite",
+      apiBaseUrl: "https://fixture.invalid",
+      login: "fixture-login",
+      password: "fixture-password",
+      fetchImpl,
+      ledger,
+      now: () => new Date("2026-10-21T00:00:00.000Z"),
+      allowPaidCall: true,
+    });
+    expect(candidates.length).toBeGreaterThan(0);
+    const posts = calls.filter((call) => call.init?.method === "POST");
+    expect(posts).toHaveLength(1);
+    expect(posts[0]?.url.startsWith("https://fixture.invalid/")).toBe(true);
+    expect(posts[0]?.url).not.toContain("api.dataforseo.com");
+    const body = JSON.parse(String(posts[0]?.init?.body)) as Array<Record<string, unknown>>;
+    expect(body).toHaveLength(1);
+    expect(body[0]).toMatchObject({ keyword: "Kindle Paperwhite", depth: 40, priority: 1 });
+    expect(ledger.micros).toBe(0);
+  });
+});
+
+describe("disabled live validation script", () => {
+  it("exits before any provider call when it is not authorized", () => {
+    const result = spawnSync(process.execPath, ["scripts/open-analysis-capped-live-validation.mjs"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        TRENDIQ_OPEN_ANALYSIS_LIVE_VALIDATION: "",
+        TRENDIQ_OPEN_ANALYSIS_LIVE_VALIDATION_BUDGET_USD: "",
+      },
+    });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(/disabled/i);
+    expect(result.stdout).toMatch(/No provider call/i);
+  });
+});
+
+async function waitFor(service: OpenAnalysisService, analysisId: string) {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const status = service.getAnalysisStatus(analysisId);
+    if (status && status.status !== "pending") return status;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`analysis ${analysisId} did not settle`);
+}

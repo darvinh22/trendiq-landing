@@ -1,7 +1,11 @@
+import { access } from "node:fs/promises";
+import path from "node:path";
 import type { ProductAnalysisResponse } from "../../app/lib/analysis/productAnalysisContract";
 import type { FetchLike } from "../../app/lib/data/search/client";
 import { getControlledProductCatalog, getControlledProductProfile } from "../analysis/controlledProductCatalog";
-import type { ProductAnalysisService } from "../analysis/productAnalysisApi";
+import type { OpenProductAnalysisApi } from "../analysis/productAnalysisApi";
+import { OpenAnalysisService } from "../analysis/openAnalysis/openAnalysisService";
+import { STORE_FILE_NAME } from "../analysis/openAnalysis/fileStore";
 import { ProductAnalysisOrchestrator } from "../analysis/productAnalysisOrchestrator";
 import {
   ProductionAnalysisEvidenceCollector,
@@ -45,14 +49,21 @@ function controlledCatalogIsReady(): boolean {
   return getControlledProductProfile("ray-ban-meta")?.productId === "ray-ban-meta";
 }
 
-export class ProductAnalysisRuntime implements ProductAnalysisService {
+export class ProductAnalysisRuntime implements OpenProductAnalysisApi {
+  private openService: OpenAnalysisService | null = null;
+
   constructor(
     readonly config: PrivateAlphaRuntimeConfig,
     readonly paidOperationGuard: ProcessPaidOperationGuard,
     private readonly orchestrator: ProductAnalysisOrchestrator,
+    private readonly evidenceCollector: AnalysisEvidenceCollector,
     private readonly logger: AlphaLogger,
     private readonly assetsReady: () => boolean,
-    private readonly now: () => Date
+    private readonly now: () => Date,
+    private readonly clockMs: () => number,
+    private readonly fetchImpl: FetchLike | undefined,
+    private readonly idFactory: (() => string) | undefined,
+    private readonly env: RuntimeEnvironment
   ) {}
 
   health(): { status: "ok" } {
@@ -102,7 +113,66 @@ export class ProductAnalysisRuntime implements ProductAnalysisService {
   }
 
   getAnalysisStatus(analysisId: string): ProductAnalysisResponse {
+    if (this.openService) {
+      const openStatus = this.openService.getAnalysisStatus(analysisId);
+      if (openStatus) return openStatus;
+    }
     return this.orchestrator.getAnalysisStatus(analysisId);
+  }
+
+  resolveOpenProduct(input: { query: string; clientKey?: string }) {
+    const service = this.ensureOpenService();
+    if (!service) {
+      return Promise.resolve({
+        statusCode: 503,
+        body: { status: "unavailable" as const, reason: "open_analysis_disabled" as const },
+      });
+    }
+    return service.resolveOpenProduct(input);
+  }
+
+  analyzeResolution(input: { resolutionId: string; candidateId?: string; clientKey?: string }) {
+    const service = this.ensureOpenService();
+    if (!service) return Promise.resolve({ status: "unavailable" as const, reason: "open_analysis_disabled" as const });
+    return service.analyzeResolution(input);
+  }
+
+  async readPersistedAnalysis(analysisId: string): Promise<ProductAnalysisResponse | null> {
+    if (!this.config.openAnalysisEnabled) return null;
+    if (!this.openService) {
+      try {
+        await access(path.join(this.config.openAnalysisDataDir, STORE_FILE_NAME));
+      } catch {
+        return null;
+      }
+    }
+    return this.ensureOpenService()?.readSettledJob(analysisId) ?? null;
+  }
+
+  private ensureOpenService(): OpenAnalysisService | null {
+    if (!this.config.openAnalysisEnabled) return null;
+    if (!this.openService) {
+      const login = this.env.DATAFORSEO_LOGIN?.trim() ?? "";
+      const password = this.env.DATAFORSEO_PASSWORD?.trim() ?? "";
+      this.openService = new OpenAnalysisService({
+        enabled: true,
+        dataDir: this.config.openAnalysisDataDir,
+        now: this.now,
+        clockMs: this.clockMs,
+        fetchImpl: this.fetchImpl,
+        apiBaseUrl: this.config.dataForSeoApiBaseUrl,
+        login,
+        password,
+        liveConfigured: (this.config.searchLive || this.config.reviewsLive) && Boolean(login && password),
+        jobDeadlineMs: this.config.jobDeadlineMs ?? DEFAULT_ALPHA_JOB_DEADLINE_MS,
+        processPaidOperationGuard: this.paidOperationGuard,
+        logger: this.logger,
+        idFactory: this.idFactory,
+        env: this.config.providerEnvironment,
+        evidenceCollector: this.evidenceCollector,
+      });
+    }
+    return this.openService;
   }
 }
 
@@ -133,8 +203,13 @@ export function createProductAnalysisRuntime(
     config,
     paidOperationGuard,
     orchestrator,
+    evidenceCollector,
     logger,
     options.assetsReady ?? (() => false),
-    now
+    now,
+    options.clockMs ?? Date.now,
+    options.fetchImpl,
+    options.idFactory,
+    env
   );
 }

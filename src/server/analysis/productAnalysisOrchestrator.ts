@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ProductAnalysisResponse } from "../../app/lib/analysis/productAnalysisContract";
+import type { ProductProfile } from "../../app/lib/data/capabilities/types";
+import type { FetchLike } from "../../app/lib/data/search/client";
 import { buildConsumerProductResult } from "../../app/lib/data/consumerResult";
 import { buildRecommendationResult } from "../../app/lib/data/recommendationEngine";
 import { buildRevenueMvpResult } from "../../app/lib/data/revenueMvpResult";
@@ -23,6 +25,11 @@ import {
   type AlphaLogger,
 } from "../runtime/alphaLogger";
 import { DEFAULT_ALPHA_JOB_DEADLINE_MS } from "../runtime/runtimeConfig";
+import {
+  buildOpenAbstentionResult,
+  OPEN_ABSTENTION_SUMMARIES,
+  withEvidenceNotes,
+} from "./openAnalysis/abstentionResult";
 
 interface AnalysisJob {
   analysisId: string;
@@ -30,6 +37,14 @@ interface AnalysisJob {
   createdAtMs: number;
   response: ProductAnalysisResponse;
   work: Promise<void>;
+}
+
+export interface ResolvedAnalysisOptions {
+  fetchImpl?: FetchLike;
+  evidenceNotes?: () => string[];
+  forceAbstention?: () => boolean;
+  failureSummary?: () => string;
+  onSettled?: (response: ProductAnalysisResponse) => void;
 }
 
 export interface ProductAnalysisOrchestratorOptions {
@@ -67,6 +82,7 @@ export class ProductAnalysisOrchestrator {
   private readonly jobDeadlineMs: number;
   private readonly clockMs: () => number;
   private readonly logger: AlphaLogger;
+  private readonly resolvedReleases = new Map<string, () => void>();
 
   constructor(options: ProductAnalysisOrchestratorOptions = {}) {
     this.evidenceCollector = options.evidenceCollector ?? new ProductionAnalysisEvidenceCollector();
@@ -172,11 +188,134 @@ export class ProductAnalysisOrchestrator {
     return this.getAnalysisStatus(analysisId);
   }
 
+  analyzeResolvedProfile(profile: ProductProfile, options: ResolvedAnalysisOptions = {}): ProductAnalysisResponse {
+    if (!/^open-[a-f0-9]{20}$/.test(profile.productId)) {
+      return { status: "error", reason: "invalid_request" };
+    }
+    this.pruneExpiredJobs();
+    const analysisId = this.idFactory();
+    if (!/^analysis_[A-Za-z0-9_-]{8,128}$/.test(analysisId) || this.jobs.has(analysisId)) {
+      return { status: "error", reason: "analysis_failed" };
+    }
+
+    const pending: ProductAnalysisResponse = { status: "pending", analysisId };
+    const startedAt = this.now().toISOString();
+    const startedAtMs = this.clockMs();
+    let deadlineReached = false;
+    let latestUsage = { ...EMPTY_USAGE };
+    const job: AnalysisJob = {
+      analysisId,
+      productId: profile.productId,
+      createdAtMs: this.now().getTime(),
+      response: pending,
+      work: Promise.resolve(),
+    };
+    this.jobs.set(analysisId, job);
+    this.activeByProduct.set(profile.productId, analysisId);
+    this.logger.log({
+      event: "analysis_started",
+      analysisId,
+      productId: profile.productId,
+      jobState: "pending",
+      startedAt,
+    });
+
+    const context: AnalysisExecutionContext = {
+      canRequest: () => !deadlineReached && this.clockMs() < startedAtMs + this.jobDeadlineMs && !options.forceAbstention?.(),
+      onUsage: (usage) => {
+        latestUsage = { ...usage };
+      },
+      fetchImpl: options.fetchImpl,
+    };
+    let releaseStart = () => {};
+    const gate = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+    this.resolvedReleases.set(analysisId, releaseStart);
+    job.work = gate.then(() => new Promise<ProductAnalysisResponse>((resolveRace) => {
+      const deadlineTimer = setTimeout(() => {
+        deadlineReached = true;
+        resolveRace({ status: "unavailable", reason: "analysis_deadline_exceeded" });
+      }, this.jobDeadlineMs);
+      this.execute(profile.productId, context, profile)
+        .catch((): ProductAnalysisResponse => ({ status: "error", reason: "analysis_failed" }))
+        .then((response) => {
+          clearTimeout(deadlineTimer);
+          resolveRace(response);
+        });
+    }))
+      .then((response) => {
+        const presented = this.presentOpenProduct(response, profile, options, startedAt);
+        job.response = redactApplicationResponse(presented, job.productId);
+        const completedAt = this.now().toISOString();
+        const finalStatus = job.response.status === "pending" ? "error" : job.response.status;
+        this.logger.log({
+          event: "analysis_settled",
+          analysisId,
+          productId: profile.productId,
+          jobState: "settled",
+          startedAt,
+          completedAt,
+          durationMs: Math.max(0, this.clockMs() - startedAtMs),
+          ...latestUsage,
+          finalStatus,
+          ...(job.response.status === "unavailable" || job.response.status === "error"
+            ? { reason: job.response.reason }
+            : {}),
+        });
+        options.onSettled?.(job.response);
+      });
+
+    return pending;
+  }
+
+  releaseResolvedAnalysis(analysisId: string): void {
+    const release = this.resolvedReleases.get(analysisId);
+    if (!release) return;
+    this.resolvedReleases.delete(analysisId);
+    release();
+  }
+
+  private presentOpenProduct(
+    response: ProductAnalysisResponse,
+    profile: ProductProfile,
+    options: ResolvedAnalysisOptions,
+    evaluatedAt: string
+  ): ProductAnalysisResponse {
+    const notes = options.evidenceNotes?.() ?? [];
+    const force = options.forceAbstention?.() ?? false;
+    const timedOut = response.status === "unavailable" && response.reason === "analysis_deadline_exceeded";
+    const evidenceFailed = response.status === "unavailable" && response.reason === "evidence_unavailable";
+    const failed = response.status === "error" && response.reason === "analysis_failed";
+    if (!force && !timedOut && !evidenceFailed && !failed) {
+      if (response.status !== "completed") return response;
+      return { status: "completed", result: withEvidenceNotes(response.result, notes) };
+    }
+    const summary = force
+      ? (options.failureSummary?.() ?? OPEN_ABSTENTION_SUMMARIES.budget)
+      : timedOut
+        ? OPEN_ABSTENTION_SUMMARIES.timeout
+        : OPEN_ABSTENTION_SUMMARIES.evidence;
+    const abstained = buildOpenAbstentionResult({
+      productId: profile.productId,
+      title: profile.canonicalTitle,
+      brand: profile.brand,
+      category: profile.category,
+      evaluatedAt,
+      summary,
+    });
+    if (!abstained) return response.status === "completed"
+      ? { status: "unavailable", reason: "evidence_unavailable" }
+      : response;
+    return { status: "completed", result: withEvidenceNotes(abstained, notes) };
+  }
+
   private async execute(
     productId: string,
-    context: AnalysisExecutionContext
+    context: AnalysisExecutionContext,
+    profileOverride?: ProductProfile
   ): Promise<ProductAnalysisResponse> {
-    const profile = getControlledProductProfile(productId);
+    const profile = profileOverride ?? getControlledProductProfile(productId);
     if (!profile || profile.productId !== productId) {
       return { status: "error", reason: "product_binding_mismatch" };
     }

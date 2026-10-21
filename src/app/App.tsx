@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArrowRight, Search, ShieldCheck, Sparkles } from "lucide-react";
+import { OpenProductSearch } from "./components/OpenProductSearch";
 import { ProductAnalysisScreen } from "./components/ProductAnalysisScreen";
 import {
   productAnalysisClient,
@@ -34,6 +35,7 @@ interface ControlledCatalogViewProps {
   searchQuery: string;
   onSearchChange: (query: string) => void;
   onSelect: (product: ControlledProductCatalogItem) => void;
+  onOpenQuery?: () => void;
 }
 
 export function ControlledCatalogView({
@@ -41,6 +43,7 @@ export function ControlledCatalogView({
   searchQuery,
   onSearchChange,
   onSelect,
+  onOpenQuery,
 }: ControlledCatalogViewProps) {
   const filteredProducts = useMemo(
     () => filterControlledCatalog(products, searchQuery),
@@ -93,6 +96,19 @@ export function ControlledCatalogView({
           </p>
         </div>
 
+        {onOpenQuery ? (
+          <button
+            type="button"
+            onClick={onOpenQuery}
+            className="w-full rounded-2xl p-3 mb-3 text-left"
+            style={{ background: "var(--card)", border: "1px solid var(--border)" }}
+          >
+            <span style={{ color: "#18D3D1", fontSize: "0.75rem", fontWeight: 800 }}>
+              Analyze a product by name
+            </span>
+          </button>
+        ) : null}
+
         {filteredProducts.length === 0 ? (
           <div className="rounded-2xl p-5 text-center" style={{ background: "var(--card)", border: "1px solid var(--border)" }}>
             <p style={{ color: "var(--foreground)", fontSize: "0.8rem", fontWeight: 700 }}>No controlled products match.</p>
@@ -140,6 +156,8 @@ export default function App({ client = productAnalysisClient }: AppProps) {
   const [catalogState, setCatalogState] = useState<CatalogState>({ phase: "loading" });
   const [selectedProduct, setSelectedProduct] = useState<ControlledProductCatalogItem | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [openSearch, setOpenSearch] = useState(false);
+  const canResolveByName = typeof client.resolve === "function" && typeof client.startResolved === "function";
 
   useEffect(() => {
     let cancelled = false;
@@ -174,12 +192,22 @@ export default function App({ client = productAnalysisClient }: AppProps) {
             onBack={() => setSelectedProduct(null)}
             client={client}
           />
+        ) : openSearch && canResolveByName && client.resolve && client.startResolved ? (
+          <OpenProductSearch
+            client={{
+              resolve: client.resolve.bind(client),
+              startResolved: client.startResolved.bind(client),
+              getStatus: client.getStatus.bind(client),
+            }}
+            onBack={() => setOpenSearch(false)}
+          />
         ) : catalogState.phase === "ready" ? (
           <ControlledCatalogView
             products={catalogState.products}
             searchQuery={searchQuery}
             onSearchChange={setSearchQuery}
             onSelect={setSelectedProduct}
+            onOpenQuery={canResolveByName ? () => setOpenSearch(true) : undefined}
           />
         ) : (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center" aria-live="polite">
