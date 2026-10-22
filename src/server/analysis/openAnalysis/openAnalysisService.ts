@@ -1,6 +1,4 @@
 import { createHash, randomBytes } from "node:crypto";
-import { access, mkdir } from "node:fs/promises";
-import { constants } from "node:fs";
 import type { ProductAnalysisResponse, ProductResolveResponse } from "../../../app/lib/analysis/productAnalysisContract";
 import type { ProductProfile } from "../../../app/lib/data/capabilities/types";
 import type { FetchLike } from "../../../app/lib/data/search/client";
@@ -16,11 +14,22 @@ import {
   OPEN_ANALYSIS_DAILY_MAX_MICROS,
   OPEN_ANALYSIS_MAX_MICROS,
   PUBLISHED_PRICE_MICROS,
+  assertReconciliationProof,
   type AnalysisSpendLedger,
+  type ReconciliationProof,
   type SpendReservation,
 } from "./costAccounting";
 import { createAnalysisSpendTracker } from "./costAccounting";
-import { OpenAnalysisFileStore, type ClientWindow, type CycleSpend, type DaySpend, type StoreDocument } from "./fileStore";
+import {
+  OpenAnalysisFileStore,
+  OpenAnalysisStoreError,
+  assertOpenAnalysisStoreReady,
+  type ClientWindow,
+  type CycleSpend,
+  type DaySpend,
+  type SpendReservationRecord,
+  type StoreDocument,
+} from "./fileStore";
 import {
   abstainMessage,
   ANALYSIS_RESULT_TTL_MS,
@@ -72,6 +81,8 @@ export interface OpenAnalysisServiceOptions {
   sleep?: (ms: number) => Promise<void>;
   pollAttempts?: number;
   pollIntervalMs?: number;
+  /** Passed to the identity shopping budget. Default remains 5_000. */
+  requestTimeoutMs?: number;
 }
 
 interface StoredOption {
@@ -124,6 +135,7 @@ export class OpenAnalysisService {
   private readonly sleep: OpenAnalysisServiceOptions["sleep"];
   private readonly pollAttempts: number | undefined;
   private readonly pollIntervalMs: number | undefined;
+  private readonly requestTimeoutMs: number | undefined;
 
   constructor(options: OpenAnalysisServiceOptions) {
     this.enabled = options.enabled;
@@ -138,11 +150,12 @@ export class OpenAnalysisService {
     this.sleep = options.sleep;
     this.pollAttempts = options.pollAttempts;
     this.pollIntervalMs = options.pollIntervalMs;
+    this.requestTimeoutMs = options.requestTimeoutMs;
     this.store = new OpenAnalysisFileStore(options.dataDir, {
       now: this.now,
       jobDeadlineMs: options.jobDeadlineMs,
     });
-    this.ledger = new StoreSpendLedger(this.store);
+    this.ledger = new FileSpendLedger(this.store);
     this.fetchImpl = options.fetchImpl;
     this.liveConfigured = options.liveConfigured === true;
     this.searchCandidates = options.searchCandidates;
@@ -191,13 +204,15 @@ export class OpenAnalysisService {
         return { statusCode: 200, body: abstain };
       }
       if (!this.searchCandidates) {
-        const remaining = await this.store.update((document) =>
-          OPEN_ANALYSIS_DAILY_MAX_MICROS - (document.spendByDay[dayKey(this.now())]?.micros ?? 0)
-        );
         if (!this.canCallProvider()) return unavailable("runtime_not_ready");
-        if (remaining < PUBLISHED_PRICE_MICROS.shoppingProductsTaskPost) {
-          return unavailable("daily_capacity_reached");
-        }
+        const gate = await this.store.update((document) => {
+          const key = dayKey(this.now());
+          if (hasUnresolvedUnknownCost(document, key)) return "unknown" as const;
+          const remaining = OPEN_ANALYSIS_DAILY_MAX_MICROS - (document.spendByDay[key]?.micros ?? 0);
+          if (remaining < PUBLISHED_PRICE_MICROS.shoppingProductsTaskPost) return "daily" as const;
+          return "ok" as const;
+        });
+        if (gate !== "ok") return unavailable("daily_capacity_reached");
       }
       const candidates = await this.loadCandidates(query, cycleId);
       const decision = decideIdentity({ query, candidates, now: this.now() });
@@ -205,8 +220,10 @@ export class OpenAnalysisService {
       return { statusCode: 200, body: this.publicResolution(stored, false) };
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
+      if (error instanceof OpenAnalysisStoreError) return unavailable("runtime_not_ready");
       if (message === "controlled_daily_spend_cap_exceeded") return unavailable("daily_capacity_reached");
       if (message === "controlled_spend_cap_exceeded") return unavailable("daily_capacity_reached");
+      if (message === "controlled_unknown_cost_blocked") return unavailable("daily_capacity_reached");
       if (message === "process_paid_operation_ceiling_exhausted") {
         return unavailable("process_paid_operation_ceiling_exhausted");
       }
@@ -269,8 +286,12 @@ export class OpenAnalysisService {
       });
       this.orchestrator.releaseResolvedAnalysis(pending.analysisId);
       return pending;
-    } catch {
+    } catch (error) {
       await this.clearInFlight(client).catch(() => undefined);
+      if (error instanceof OpenAnalysisStoreError) return { status: "unavailable", reason: "runtime_not_ready" };
+      if (error instanceof Error && error.message === "controlled_unknown_cost_blocked") {
+        return { status: "unavailable", reason: "daily_capacity_reached" };
+      }
       return { status: "unavailable", reason: "analysis_failed" };
     }
   }
@@ -349,8 +370,7 @@ export class OpenAnalysisService {
 
   private async dataDirWritable(): Promise<boolean> {
     try {
-      await mkdir(this.dataDir, { recursive: true });
-      await access(this.dataDir, constants.W_OK);
+      await assertOpenAnalysisStoreReady(this.dataDir);
       return true;
     } catch {
       return false;
@@ -380,6 +400,7 @@ export class OpenAnalysisService {
       sleep: this.sleep,
       clockMs: this.clockMs,
       deadlineAtMs: this.clockMs() + this.jobDeadlineMs,
+      requestTimeoutMs: this.requestTimeoutMs,
       env: this.env,
     });
   }
@@ -427,7 +448,7 @@ export class OpenAnalysisService {
   }
 }
 
-class StoreSpendLedger implements AnalysisSpendLedger {
+export class FileSpendLedger implements AnalysisSpendLedger {
   constructor(private readonly store: OpenAnalysisFileStore) {}
 
   reserve(micros: number, now: Date, context?: { cycleId: string }): Promise<SpendReservation> {
@@ -435,6 +456,9 @@ class StoreSpendLedger implements AnalysisSpendLedger {
       if (!document.cycles) document.cycles = {};
       if (!context?.cycleId) return { ok: false, micros: 0, reason: "cycle" };
       const key = dayKey(now);
+      if (hasUnresolvedUnknownCost(document, key, context.cycleId)) {
+        return { ok: false, micros: 0, reason: "unknown_cost" };
+      }
       const day = daySpend(document, key);
       const cycle = ensureCycle(document, context.cycleId, key);
       if (day.micros + micros > OPEN_ANALYSIS_DAILY_MAX_MICROS) return { ok: false, micros: 0, reason: "daily" };
@@ -447,6 +471,7 @@ class StoreSpendLedger implements AnalysisSpendLedger {
         createdAt: now.toISOString(),
         dayKey: key,
         cycleId: context.cycleId,
+        costState: "reserved",
       };
       if (micros > 0) day.paidOperationCount += 1;
       return { ok: true, id, micros };
@@ -457,17 +482,65 @@ class StoreSpendLedger implements AnalysisSpendLedger {
     await this.store.update((document) => {
       const found = findReservation(document, id);
       if (!found) return;
-      const delta = actualMicros - found.reservation.micros;
-      found.day.micros += delta;
-      if (found.day.micros < 0) found.day.micros = 0;
-      const cycle = document.cycles?.[found.reservation.cycleId];
-      if (cycle) {
-        cycle.micros += delta;
-        if (cycle.micros < 0) cycle.micros = 0;
-      }
-      delete found.day.reservations[id];
+      if (found.reservation.costState === "unknown") return;
+      applyReservationCost(document, id, found, actualMicros);
     });
   }
+
+  async markUnknown(id: string, _now: Date): Promise<void> {
+    await this.store.update((document) => {
+      const found = findReservation(document, id);
+      if (!found) throw new Error("open_analysis_reservation_missing");
+      found.reservation.costState = "unknown";
+    });
+  }
+
+  async reconcileVerified(
+    id: string,
+    actualMicros: number,
+    _responseAt: Date,
+    proof: ReconciliationProof
+  ): Promise<void> {
+    assertReconciliationProof(actualMicros, proof);
+    await this.store.update((document) => {
+      const found = findReservation(document, id);
+      if (!found || found.reservation.costState !== "unknown") {
+        throw new Error("open_analysis_reconciliation_unverified");
+      }
+      applyReservationCost(document, id, found, actualMicros);
+    });
+  }
+}
+
+function applyReservationCost(
+  document: StoreDocument,
+  id: string,
+  found: { day: DaySpend; reservation: SpendReservationRecord },
+  actualMicros: number
+): void {
+  const delta = actualMicros - found.reservation.micros;
+  found.day.micros += delta;
+  if (found.day.micros < 0) found.day.micros = 0;
+  const cycle = document.cycles?.[found.reservation.cycleId];
+  if (cycle) {
+    cycle.micros += delta;
+    if (cycle.micros < 0) cycle.micros = 0;
+  }
+  delete found.day.reservations[id];
+}
+
+function hasUnresolvedUnknownCost(document: StoreDocument, day: string, cycleId?: string): boolean {
+  const todays = document.spendByDay[day];
+  if (todays && Object.values(todays.reservations).some((reservation) => reservation.costState === "unknown")) {
+    return true;
+  }
+  if (!cycleId) return false;
+  for (const spend of Object.values(document.spendByDay)) {
+    for (const reservation of Object.values(spend.reservations)) {
+      if (reservation.cycleId === cycleId && reservation.costState === "unknown") return true;
+    }
+  }
+  return false;
 }
 
 type PreparedAnalysis =
@@ -508,9 +581,15 @@ function prepareAnalysis(
   }
   window.hourAnalyses += 1;
   window.dayAnalyses += 1;
-  const day = daySpend(document, dayKey(now));
-  const dailyRemaining = OPEN_ANALYSIS_DAILY_MAX_MICROS - day.micros;
   const cycleId = resolution.cycleId || `cycle_${input.resolutionId}`;
+  const key = dayKey(now);
+  if (hasUnresolvedUnknownCost(document, key, cycleId)) {
+    window.hourAnalyses -= 1;
+    window.dayAnalyses -= 1;
+    return { kind: "response", response: { status: "unavailable", reason: "daily_capacity_reached" } };
+  }
+  const day = daySpend(document, key);
+  const dailyRemaining = OPEN_ANALYSIS_DAILY_MAX_MICROS - day.micros;
   const cycleRemaining = OPEN_ANALYSIS_MAX_MICROS - (document.cycles?.[cycleId]?.micros ?? 0);
   if (dailyRemaining <= 0 || cycleRemaining <= 0) {
     window.hourAnalyses -= 1;

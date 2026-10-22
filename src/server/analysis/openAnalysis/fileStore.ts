@@ -1,11 +1,31 @@
 import { randomBytes } from "node:crypto";
-import { open, mkdir, readdir, readFile, rename, rm, stat } from "node:fs/promises";
+import { open, readdir, readFile, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
 
 export const OPEN_ANALYSIS_STORE_VERSION = 1 as const;
 export const STORE_FILE_NAME = "open-analysis.json";
-const LOCK_STALE_MS = 60_000;
+/** Written only by explicit provisioning. Distinguishes a deleted ledger from a first boot. */
+export const PROVISION_MARKER_NAME = "open-analysis.provisioned";
+/**
+ * A lock older than this may be removed. Safe only for one process on one host:
+ * another replica does not share this pid table, and a live local pid is treated
+ * as stale once the age passes. See docs/PRIVATE_ALPHA_OPERATIONS.md.
+ */
+export const LOCK_STALE_MS = 60_000;
 const RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
+
+export type OpenAnalysisStoreFailure =
+  | "open_analysis_data_dir_missing"
+  | "open_analysis_spend_ledger_missing"
+  | "open_analysis_store_not_provisioned"
+  | "open_analysis_store_corrupt";
+
+export class OpenAnalysisStoreError extends Error {
+  constructor(message: OpenAnalysisStoreFailure) {
+    super(message);
+    this.name = "OpenAnalysisStoreError";
+  }
+}
 
 export interface SpendReservationRecord {
   micros: number;
@@ -14,6 +34,11 @@ export interface SpendReservationRecord {
   dayKey: string;
   /** Resolution+analysis cycle this charge belongs to. */
   cycleId: string;
+  /**
+   * `reserved` is a hold. `unknown` means a paid request was sent and no
+   * verifiable cost came back. Unknown holds are not a final price.
+   */
+  costState?: "reserved" | "unknown";
 }
 
 export interface DaySpend {
@@ -50,6 +75,8 @@ export interface StoreDocument {
   priceByIdentity: Record<string, { expiresAt: string; observedAt: string; amount: number | null }>;
   resultsByIdentity: Record<string, { expiresAt: string; value: unknown }>;
   jobs: Record<string, { status: "pending" | "settled"; createdAt: string; response?: unknown; clientHash?: string }>;
+  /** Set by explicit provisioning. Absent on ledgers created before that step existed. */
+  provisionedAt?: string;
 }
 
 export function emptyStoreDocument(): StoreDocument {
@@ -88,7 +115,7 @@ export class OpenAnalysisFileStore {
 
   constructor(
     private readonly directory: string,
-    private readonly options: { now?: () => Date; jobDeadlineMs?: number } = {}
+    private readonly options: { now?: () => Date; jobDeadlineMs?: number; lockWaitMs?: number } = {}
   ) {}
 
   get filePath(): string {
@@ -106,8 +133,11 @@ export class OpenAnalysisFileStore {
   }
 
   private async updateLocked<T>(mutator: (document: StoreDocument) => T | Promise<T>): Promise<T> {
-    await mkdir(this.directory, { recursive: true });
-    const lock = await acquireLock(path.join(this.directory, `${STORE_FILE_NAME}.lock`));
+    await requireDirectory(this.directory);
+    const lock = await acquireLock(
+      path.join(this.directory, `${STORE_FILE_NAME}.lock`),
+      this.options.lockWaitMs ?? 10_000
+    );
     try {
       this.document = await loadDocument(this.directory);
       recoverInFlight(this.document, this.options.now?.() ?? new Date(), this.options.jobDeadlineMs ?? 55_000);
@@ -144,8 +174,8 @@ function prune(document: StoreDocument, now: Date): void {
   const cutoff = now.getTime() - RETENTION_MS;
   for (const [day, spend] of Object.entries(document.spendByDay)) {
     const stamp = Date.parse(`${day}T00:00:00.000Z`);
-    if (Number.isFinite(stamp) && stamp < cutoff) delete document.spendByDay[day];
-    else void spend;
+    const unknown = Object.values(spend.reservations).some((reservation) => reservation.costState === "unknown");
+    if (!unknown && Number.isFinite(stamp) && stamp < cutoff) delete document.spendByDay[day];
   }
   for (const [day, stamp] of Object.entries(document.resolveCountByDay)) {
     void stamp;
@@ -176,19 +206,112 @@ function dropExpired(records: Record<string, { expiresAt: string }>, now: Date):
   }
 }
 
+export async function assertOpenAnalysisStoreReady(directory: string): Promise<void> {
+  await loadDocument(directory);
+}
+
+/**
+ * Deliberate first-time provisioning. This is the only path that may create a
+ * zeroed ledger. Restart and recovery never call it. A missing directory is not
+ * created. A previously initialized ledger that is missing or corrupt is not
+ * replaced.
+ */
+export async function provisionOpenAnalysisStore(
+  directory: string,
+  now = new Date()
+): Promise<"created" | "unchanged"> {
+  await requireDirectory(directory);
+  const ledgerPath = path.join(directory, STORE_FILE_NAME);
+  let ledgerPresent = true;
+  try {
+    await stat(ledgerPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") ledgerPresent = false;
+    else throw error;
+  }
+  const marked = await markerExists(directory);
+  if (!ledgerPresent) {
+    const recovered = await recoverTemp(directory, ledgerPath);
+    if (recovered) {
+      if (!marked) await writeMarker(directory, now);
+      return "unchanged";
+    }
+    if (marked) throw new OpenAnalysisStoreError("open_analysis_spend_ledger_missing");
+    const document = emptyStoreDocument();
+    document.provisionedAt = now.toISOString();
+    await atomicWriteJson(ledgerPath, document);
+    await writeMarker(directory, now);
+    return "created";
+  }
+  await loadDocument(directory);
+  if (!marked) await writeMarker(directory, now);
+  return "unchanged";
+}
+
 async function loadDocument(directory: string): Promise<StoreDocument> {
+  await requireDirectory(directory);
   const finalPath = path.join(directory, STORE_FILE_NAME);
   const recovered = await recoverTemp(directory, finalPath);
   if (recovered) return recovered;
   try {
-    const parsed = JSON.parse(await readFile(finalPath, "utf8")) as unknown;
-    if (!isDocument(parsed)) throw new Error("open_analysis_store_unreadable");
+    const raw = await readFile(finalPath, "utf8");
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw) as unknown;
+    } catch {
+      throw new OpenAnalysisStoreError("open_analysis_store_corrupt");
+    }
+    if (!isDocument(parsed)) throw new OpenAnalysisStoreError("open_analysis_store_corrupt");
     return normalizeDocument(parsed);
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ENOENT") return emptyStoreDocument();
+    if (error instanceof OpenAnalysisStoreError) throw error;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      if (await markerExists(directory)) throw new OpenAnalysisStoreError("open_analysis_spend_ledger_missing");
+      throw new OpenAnalysisStoreError("open_analysis_store_not_provisioned");
+    }
     throw error;
   }
+}
+
+async function requireDirectory(directory: string): Promise<void> {
+  if (!directory.trim()) throw new OpenAnalysisStoreError("open_analysis_data_dir_missing");
+  try {
+    const info = await stat(directory);
+    if (!info.isDirectory()) throw new OpenAnalysisStoreError("open_analysis_data_dir_missing");
+  } catch (error) {
+    if (error instanceof OpenAnalysisStoreError) throw error;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new OpenAnalysisStoreError("open_analysis_data_dir_missing");
+    }
+    throw error;
+  }
+}
+
+async function markerExists(directory: string): Promise<boolean> {
+  try {
+    const info = await stat(path.join(directory, PROVISION_MARKER_NAME));
+    return info.isFile();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+async function writeMarker(directory: string, now: Date): Promise<void> {
+  const markerPath = path.join(directory, PROVISION_MARKER_NAME);
+  const tmp = `${markerPath}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+  const handle = await open(tmp, "w", 0o600);
+  try {
+    await handle.writeFile(JSON.stringify({
+      version: OPEN_ANALYSIS_STORE_VERSION,
+      provisionedAt: now.toISOString(),
+      ledger: STORE_FILE_NAME,
+    }));
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  await rename(tmp, markerPath);
 }
 
 async function recoverTemp(directory: string, finalPath: string): Promise<StoreDocument | null> {
@@ -244,7 +367,7 @@ async function atomicWriteJson(filePath: string, document: StoreDocument): Promi
   await rename(tmp, filePath);
 }
 
-async function acquireLock(lockPath: string): Promise<{ path: string }> {
+async function acquireLock(lockPath: string, waitMs: number): Promise<{ path: string }> {
   const started = Date.now();
   for (;;) {
     try {
@@ -258,12 +381,17 @@ async function acquireLock(lockPath: string): Promise<{ path: string }> {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       await maybeStealLock(lockPath);
-      if (Date.now() - started > 10_000) throw new Error("open_analysis_store_lock_timeout");
+      if (Date.now() - started > waitMs) throw new Error("open_analysis_store_lock_timeout");
       await delay(20);
     }
   }
 }
 
+/**
+ * Take over a lock whose owner is gone, whose record is unreadable, or whose
+ * age exceeds LOCK_STALE_MS. A fresh lock owned by a live pid on this host is
+ * left in place. This is not safe across replicas.
+ */
 async function maybeStealLock(lockPath: string): Promise<void> {
   try {
     const raw = await readFile(lockPath, "utf8");

@@ -27,3 +27,10 @@
   `TRENDIQ_OPEN_ANALYSIS_ENABLED=true`. That path has its own spend caps and a
   file-backed store. See `docs/OPEN_ANALYSIS.md`. Affiliate programs are not
   connected.
+
+  Open-analysis spend state is safe only on a single Node process and a single
+  replica. The file lock, including stale-lock takeover, is not a distributed
+  lock. Do not run a second process against the same `TRENDIQ_DATA_DIR`.
+  `TRENDIQ_DATA_DIR` does not fall back to `.trendiq` in the working directory.
+  An operator provisions the ledger once; restart does not create a new zeroed
+  ledger. See `docs/PRIVATE_ALPHA_OPERATIONS.md`.

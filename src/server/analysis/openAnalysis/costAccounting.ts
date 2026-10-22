@@ -6,6 +6,7 @@ import {
   DATAFORSEO_GOOGLE_SHOPPING_PRODUCTS_TASK_POST_PATH,
   DATAFORSEO_GOOGLE_SHOPPING_REVIEWS_TASK_POST_PATH,
 } from "../../../app/lib/data/reviews/client";
+import { ProviderExecutionError } from "../../../app/lib/data/capabilities/types";
 import type { FetchLike } from "../../../app/lib/data/search/client";
 
 /** Integer millionths of a US dollar. $0.15 is 150_000 micros. */
@@ -94,7 +95,13 @@ export interface SpendReservation {
   id?: string;
   micros: number;
   /** Which limit rejected the reservation. Absent when the reservation is held. */
-  reason?: "cycle" | "daily";
+  reason?: "cycle" | "daily" | "unknown_cost";
+}
+
+export interface ReconciliationProof {
+  source: "provider_response";
+  /** Finite provider `cost` in USD. Must convert to `actualMicros`. */
+  providerCostUsd: number;
 }
 
 export interface SpendReserveContext {
@@ -109,6 +116,16 @@ export interface AnalysisSpendLedger {
    * the reservation, not the day `now` falls on.
    */
   reconcile(id: string, actualMicros: number, now: Date): Promise<void>;
+  /**
+   * A paid request was sent and the cost did not come back. Keeps the hold and
+   * blocks the reservation's UTC day and cycle. Does not book the estimate.
+   */
+  markUnknown(id: string, now: Date): Promise<void>;
+  /**
+   * Clears an unknown hold only when `proof` matches `actualMicros`. Refuses a
+   * proof that is missing or does not match.
+   */
+  reconcileVerified(id: string, actualMicros: number, now: Date, proof: ReconciliationProof): Promise<void>;
 }
 
 export interface AnalysisSpendTracker {
@@ -154,7 +171,9 @@ export function createAnalysisSpendTracker(options: {
           dailyBlocked = reservation.reason !== "cycle";
           throw new Error(reservation.reason === "cycle"
             ? "controlled_spend_cap_exceeded"
-            : "controlled_daily_spend_cap_exceeded");
+            : reservation.reason === "unknown_cost"
+              ? "controlled_unknown_cost_blocked"
+              : "controlled_daily_spend_cap_exceeded");
         }
         try {
           const response = await replayResponse(await fetchImpl(url, init));
@@ -165,9 +184,16 @@ export function createAnalysisSpendTracker(options: {
           return response;
         } catch (error) {
           const message = error instanceof Error ? error.message : "";
+          if (isInFlightPaidTimeout(error) && estimate > 0) {
+            await options.ledger.markUnknown(reservation.id, reservedAt);
+            spentMicros += estimate;
+            exceeded = true;
+            throw error;
+          }
           if (
             message !== "controlled_spend_cap_exceeded" &&
             message !== "controlled_daily_spend_cap_exceeded" &&
+            message !== "controlled_unknown_cost_blocked" &&
             message !== "process_paid_operation_ceiling_exhausted"
           ) {
             await options.ledger.reconcile(reservation.id, estimate, reservedAt);
@@ -224,6 +250,38 @@ async function replayResponse(response: {
     },
     text: async () => textBody,
   };
+}
+
+function isInFlightPaidTimeout(error: unknown): boolean {
+  if (error instanceof ProviderExecutionError) return error.failureCategory === "provider_timeout";
+  return error instanceof Error && error.message === "controlled_provider_request_timeout";
+}
+
+export function assertReconciliationProof(actualMicros: number, proof: ReconciliationProof | undefined): void {
+  if (!proof || proof.source !== "provider_response") throw new Error("open_analysis_reconciliation_unverified");
+  if (typeof proof.providerCostUsd !== "number" || !Number.isFinite(proof.providerCostUsd) || proof.providerCostUsd < 0) {
+    throw new Error("open_analysis_reconciliation_unverified");
+  }
+  if (usdToMicros(proof.providerCostUsd) !== actualMicros) throw new Error("open_analysis_reconciliation_unverified");
+}
+
+/**
+ * Applies a late provider body to an unknown hold. A body with no finite cost
+ * leaves the hold and the block in place. This does not book the list-price estimate.
+ */
+export async function reconcileUnknownFromProviderBody(
+  ledger: AnalysisSpendLedger,
+  id: string,
+  body: unknown,
+  now: Date
+): Promise<boolean> {
+  const micros = readResponseCostMicros(body);
+  if (micros === null) return false;
+  await ledger.reconcileVerified(id, micros, now, {
+    source: "provider_response",
+    providerCostUsd: micros / USD_MICROS,
+  });
+  return true;
 }
 
 function safePath(url: string): string {
@@ -295,6 +353,7 @@ export function estimateOpenAnalysisSpend(): OpenAnalysisSpendEstimate {
       "Estimate from the code paths in productionEvidenceCollector and the resolve shopping search, priced from public DataForSEO list pages. Not a bill.",
       "Task GET polls reserve $0 and then add the response cost field when present.",
       "Errors and thrown calls reserve the list-price estimate so retries and failures still count.",
+      "A timeout after a paid request was sent is not booked at the estimate. The hold stays unknown and blocks that UTC day and cycle until an explicit reconciliation with the provider cost.",
       "A call is not started unless the published list price still fits in both the resolution+analysis cycle ($0.15) and the UTC day the reservation is made ($3).",
       "Resolve and analysis share one cycle ledger. There is no separate $0.002 allowance on top of $0.15.",
       "Returned provider cost can exceed the published list price. That overage is recorded on the reservation's original UTC day and can put the cycle or the day above the limit. This is not a hard invoice cap. See docs/OPEN_ANALYSIS.md.",

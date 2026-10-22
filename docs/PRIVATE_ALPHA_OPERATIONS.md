@@ -5,9 +5,15 @@ alpha. It does not describe a public or multi-replica deployment.
 
 ## Deployment contract
 
-- Run exactly one Node process and exactly one deployment replica.
-- Disable auto-scaling and rolling deployment overlap so two application
-  processes are never active at the same time.
+- Run exactly one Node process and exactly one deployment replica. This is a
+  hard requirement for open-analysis spend, not only for the Ray-Ban Meta job
+  map. The spend ledger is one JSON file guarded by a local lock file. The lock
+  is not shared across hosts. Stale-lock takeover removes a lock older than 60
+  seconds, a lock whose pid is not alive on this machine, or a lock file that
+  cannot be parsed. A second replica can pass that lock and spend again. Do not
+  add a second process, a second container, or a second host against the same
+  `TRENDIQ_DATA_DIR`. Disable auto-scaling and rolling overlap so two
+  application processes are never active at the same time.
 - Build with `npm run build` and start with `npm start`. Vite preview is not the
   production server.
 - `PORT` defaults to 3000. Leave `HOST` unset to listen on all interfaces, which
@@ -105,9 +111,27 @@ sudo chown <service-user>:<service-group> /var/lib/trendiq
 sudo chmod 750 /var/lib/trendiq
 ```
 
-Set `TRENDIQ_DATA_DIR=/var/lib/trendiq`. The process then creates
-`open-analysis.json` with atomic writes. If the directory is not writable, open
-analysis fails closed and does not call a provider. Leave the flag false until
-that directory exists. Spend counters, identity cache, and open-analysis jobs
-live in that file. Ray-Ban Meta jobs stay in memory and are still lost on
-restart. See `docs/OPEN_ANALYSIS.md`.
+Set `TRENDIQ_DATA_DIR=/var/lib/trendiq`. Do not leave it empty. An empty value
+does not fall back to a `.trendiq` directory in the working directory, and the
+process will not create `/var/lib/trendiq` or a new ledger on startup.
+
+After the directory exists, provision the ledger once. This is the only step
+that may create a zeroed spend file:
+
+```text
+TRENDIQ_DATA_DIR=/var/lib/trendiq node --experimental-transform-types scripts/provision-open-analysis-store.mjs
+```
+
+Restart and recovery only open that file. They do not provision it again. If
+the configured directory is missing, the ledger file is missing after it was
+provisioned, or the JSON is corrupt, open analysis refuses paid calls and does
+not write a replacement with counters at zero. A timeout after a paid request
+was sent records an unknown cost and blocks new paid calls for that UTC day and
+cycle until the provider `cost` is reconciled explicitly. A late response does
+not clear that hold by itself.
+
+Leave `TRENDIQ_OPEN_ANALYSIS_ENABLED` false until the directory exists, the
+ledger has been provisioned, and the single-replica limit above is in place.
+Spend counters, identity cache, and open-analysis jobs live in that file.
+Ray-Ban Meta jobs stay in memory and are still lost on restart. See
+`docs/OPEN_ANALYSIS.md`.

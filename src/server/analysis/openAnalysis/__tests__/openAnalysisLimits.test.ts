@@ -13,7 +13,7 @@ import {
   createAnalysisSpendTracker,
   type AnalysisSpendLedger,
 } from "../costAccounting";
-import { OpenAnalysisFileStore, STORE_FILE_NAME } from "../fileStore";
+import { OpenAnalysisFileStore, STORE_FILE_NAME, provisionOpenAnalysisStore } from "../fileStore";
 import { OpenAnalysisService } from "../openAnalysisService";
 import { isProhibitedQuery, queryHash, readShoppingCandidates, sanitizeProductQuery } from "../productResolver";
 import { searchShoppingIdentity } from "../shoppingIdentitySearch";
@@ -32,6 +32,12 @@ async function tempDir(): Promise<string> {
   return dir;
 }
 
+async function readyDir(): Promise<string> {
+  const dir = await tempDir();
+  await provisionOpenAnalysisStore(dir);
+  return dir;
+}
+
 function jsonResponse(body: unknown, ok = true) {
   const text = JSON.stringify(body);
   return {
@@ -44,23 +50,35 @@ function jsonResponse(body: unknown, ok = true) {
 
 function memoryLedger(): AnalysisSpendLedger & { micros: number; calls: number } {
   const reservations = new Map<string, number>();
+  const unknown = new Set<string>();
   const ledger = {
     micros: 0,
     calls: 0,
     async reserve(micros: number) {
       ledger.calls += 1;
-      if (ledger.micros + micros > OPEN_ANALYSIS_DAILY_MAX_MICROS) return { ok: false, micros: 0 };
+      if (unknown.size > 0) return { ok: false as const, micros: 0, reason: "unknown_cost" as const };
+      if (ledger.micros + micros > OPEN_ANALYSIS_DAILY_MAX_MICROS) return { ok: false as const, micros: 0, reason: "daily" as const };
       const id = `r${ledger.calls}`;
       ledger.micros += micros;
       reservations.set(id, micros);
-      return { ok: true, id, micros };
+      return { ok: true as const, id, micros };
     },
     async reconcile(id: string, actualMicros: number) {
+      if (unknown.has(id)) return;
       const reserved = reservations.get(id);
       if (reserved === undefined) return;
       ledger.micros += actualMicros - reserved;
       if (ledger.micros < 0) ledger.micros = 0;
       reservations.delete(id);
+    },
+    async markUnknown(id: string) {
+      if (!reservations.has(id)) throw new Error("open_analysis_reservation_missing");
+      unknown.add(id);
+    },
+    async reconcileVerified(id: string, actualMicros: number) {
+      if (!unknown.has(id)) throw new Error("open_analysis_reconciliation_unverified");
+      unknown.delete(id);
+      await ledger.reconcile(id, actualMicros);
     },
   };
   return ledger;
@@ -109,7 +127,7 @@ describe("open analysis spend caps", () => {
   });
 
   it("blocks a resolve when the daily file counter is already $3", async () => {
-    const dataDir = await tempDir();
+    const dataDir = await readyDir();
     const now = new Date("2026-10-21T12:00:00.000Z");
     const store = new OpenAnalysisFileStore(dataDir, { now: () => now });
     await store.update((document) => {
@@ -140,7 +158,7 @@ describe("open analysis spend caps", () => {
   });
 
   it("keeps a failed call's estimate after a new store instance reads the file", async () => {
-    const dataDir = await tempDir();
+    const dataDir = await readyDir();
     const fetchImpl = vi.fn<FetchLike>(async () => {
       throw new Error("provider_down");
     });
@@ -169,7 +187,7 @@ describe("open analysis spend caps", () => {
 
 describe("open analysis file store", () => {
   it("does not lose parallel increments and steals a dead lock", async () => {
-    const dataDir = await tempDir();
+    const dataDir = await readyDir();
     const first = new OpenAnalysisFileStore(dataDir);
     const second = new OpenAnalysisFileStore(dataDir);
     await Promise.all(Array.from({ length: 20 }, (_, index) => {
@@ -220,7 +238,7 @@ describe("open analysis file store", () => {
 
 describe("identity cache, price ttl, and analysis abstention", () => {
   it("reuses identity for 30 days, marks price stale after 24 hours, and spends nothing on a cached analysis", async () => {
-    const dataDir = await tempDir();
+    const dataDir = await readyDir();
     let now = new Date("2026-10-01T00:00:00.000Z");
     const searches: string[] = [];
     let releaseCollect: (() => void) | undefined;
@@ -292,7 +310,7 @@ describe("identity cache, price ttl, and analysis abstention", () => {
   });
 
   it("enforces hourly, daily, and in-flight analysis limits without a second live run", async () => {
-    const dataDir = await tempDir();
+    const dataDir = await readyDir();
     let now = new Date("2026-10-01T00:00:00.000Z");
     let gate: Promise<void> = Promise.resolve();
     let openGate = () => {};
@@ -361,7 +379,7 @@ describe("identity cache, price ttl, and analysis abstention", () => {
   });
 
   it("stops name checks at 100 per day and does not treat ordinary product words as prohibited", async () => {
-    const dataDir = await tempDir();
+    const dataDir = await readyDir();
     const searches = vi.fn(async () => {
       throw new Error("must_not_search");
     });
@@ -476,7 +494,7 @@ describe("query identity and shopping polls", () => {
   });
 
   it("reconciles a reservation onto the UTC day it was made", async () => {
-    const dataDir = await tempDir();
+    const dataDir = await readyDir();
     let now = new Date("2026-10-21T23:59:00.000Z");
     const fetchImpl: FetchLike = async (_url, init) => {
       if (init?.method === "POST") {
@@ -504,7 +522,7 @@ describe("query identity and shopping polls", () => {
   });
 
   it("lets only one of two concurrent resolves reserve the last daily dollar", async () => {
-    const dataDir = await tempDir();
+    const dataDir = await readyDir();
     const now = new Date("2026-10-21T12:00:00.000Z");
     const seeded = new OpenAnalysisFileStore(dataDir, { now: () => now });
     await seeded.update((document) => {
@@ -558,7 +576,7 @@ describe("query identity and shopping polls", () => {
 
 describe("shared resolution and analysis cycle", () => {
   it("does not give analysis a fresh $0.15 after identity spend", async () => {
-    const dataDir = await tempDir();
+    const dataDir = await readyDir();
     const urls: string[] = [];
     const fetchImpl: FetchLike = async (url, init) => {
       urls.push(String(url));

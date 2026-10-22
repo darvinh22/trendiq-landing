@@ -138,7 +138,7 @@ export class ProductAnalysisRuntime implements OpenProductAnalysisApi {
   }
 
   async readPersistedAnalysis(analysisId: string): Promise<ProductAnalysisResponse | null> {
-    if (!this.config.openAnalysisEnabled) return null;
+    if (!this.config.openAnalysisEnabled || !this.config.openAnalysisDataDir) return null;
     if (!this.openService) {
       try {
         await access(path.join(this.config.openAnalysisDataDir, STORE_FILE_NAME));

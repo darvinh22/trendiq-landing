@@ -28,7 +28,10 @@ cycle ledger. There is no separate identity allowance on top of the cycle limit.
 - 100 name resolutions per UTC day, 5 analyses per client per hour, 20 per
   client per day, and one analysis in flight per client.
 - This deployment is one Node process and one replica. The file lock is the
-  concurrency control.
+  concurrency control. It is not safe on two replicas or two hosts. Stale-lock
+  takeover (60 seconds, or a dead pid, or an unreadable lock file) assumes the
+  owner is a process on this same machine. A second replica can spend at the
+  same time. Do not scale this service out.
 
 ### What the money control guarantees
 
@@ -36,8 +39,17 @@ Before a call, the process atomically reserves the published list price for
 that request. The reservation is refused when it would put the cycle over
 $0.15 or the UTC day of the reservation over $3. The reservation stays on that
 UTC day. A response that arrives after midnight is reconciled to the same day.
-A thrown call, an HTTP error, or a crash keeps the reservation. It is not
-refunded and it is not moved to the next day.
+A thrown call or an HTTP error keeps the reservation at the published list
+price. It is not refunded and it is not moved to the next day. A crash leaves
+the reservation in place.
+
+A timeout after a paid request was sent is different. The cost is `unknown`.
+The reservation stays on its UTC day and is not released. The list price is not
+booked as the final cost. New paid operations on that UTC day, and on the same
+resolution+analysis cycle, are refused until an explicit reconciliation passes
+a provider response whose `cost` converts to the recorded amount. A late
+response that arrives by itself does not clear the hold. A late body with no
+finite `cost` does not clear it either. There is no automatic release.
 
 This is not a hard invoice cap. DataForSEO can return a `cost` higher than the
 published list price for the same request. That higher amount is recorded after
@@ -83,10 +95,27 @@ Identity and specs are kept for 30 days. Price and availability are kept for
 resolved product within 24 hours returns the stored result and does not spend
 again. The evidence date is included on the resolve response and on the result.
 
-The store is one JSON file under `TRENDIQ_DATA_DIR` (default `.trendiq` in the
-working directory). Writes use a temp file plus rename, and a lock file.
-Creating `/var/lib/trendiq` on a production host needs root. This repository
-does not create that directory. See `docs/PRIVATE_ALPHA_OPERATIONS.md`.
+The store is one JSON file named `open-analysis.json`. `TRENDIQ_DATA_DIR` is
+required. An unset or blank value does not fall back to `.trendiq` in the
+working directory. The process does not create the directory and does not
+create a ledger on startup or restart.
+
+First use is an explicit provision, after the directory already exists:
+
+```text
+node --experimental-transform-types scripts/provision-open-analysis-store.mjs
+```
+
+That command is the only path that may write a zeroed ledger. Running it again
+does not reset counters. If the directory is missing, the provision marker
+exists but the ledger file is gone, or the ledger JSON is corrupt, paid
+open-analysis calls are refused and no new zeroed file is written. A restart
+of a valid ledger reads the same counters.
+
+Writes use a temp file plus rename, and a lock file. The lock is for one
+process on one host. Creating `/var/lib/trendiq` on a production host needs
+root. This repository does not create that directory. See
+`docs/PRIVATE_ALPHA_OPERATIONS.md`.
 
 ## What this build does not do
 

@@ -10,6 +10,7 @@ import {
   OPEN_PRODUCT_BATTERY,
   assertBatteryShape,
 } from "../../fixtures/openProductBattery/v1/battery";
+import { provisionOpenAnalysisStore } from "../fileStore";
 import { OpenAnalysisService } from "../openAnalysisService";
 import { readShoppingCandidates } from "../productResolver";
 import { estimateOpenAnalysisSpend } from "../costAccounting";
@@ -49,6 +50,7 @@ describe("open product battery v1", () => {
     const rows: Array<{ product: string; outcome: string; reason: string }> = [];
     for (const product of OPEN_PRODUCT_BATTERY.products) {
       const dataDir = await tempDir();
+      await provisionOpenAnalysisStore(dataDir);
       const service = new OpenAnalysisService({
         enabled: true,
         analysisEnabled: true,

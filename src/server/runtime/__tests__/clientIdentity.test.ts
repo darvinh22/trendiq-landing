@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AnalysisEvidenceCollector } from "../../analysis/productionEvidenceCollector";
 import { OPEN_PRODUCT_BATTERY } from "../../analysis/fixtures/openProductBattery/v1/battery";
+import { provisionOpenAnalysisStore } from "../../analysis/openAnalysis/fileStore";
 import { OpenAnalysisService } from "../../analysis/openAnalysis/openAnalysisService";
 import { readShoppingCandidates } from "../../analysis/openAnalysis/productResolver";
 import { clientIdentity } from "../productAnalysisHttp";
@@ -70,6 +71,7 @@ describe("open analysis client identity", () => {
   it("keeps a rotated forwarded header in the same analysis bucket", async () => {
     const dataDir = await mkdtemp(join(tmpdir(), "trendiq-client-"));
     dirs.push(dataDir);
+    await provisionOpenAnalysisStore(dataDir);
     let release = () => {};
     const gate = new Promise<void>((resolve) => { release = resolve; });
     const collect = vi.fn(async (profile: { productId: string }) => {

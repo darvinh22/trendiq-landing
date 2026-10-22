@@ -40,6 +40,7 @@ export async function searchShoppingIdentity(input: {
   sleep?: (ms: number) => Promise<void>;
   clockMs?: () => number;
   deadlineAtMs?: number;
+  requestTimeoutMs?: number;
   env?: Record<string, string | undefined>;
 }): Promise<ShoppingCandidate[]> {
   if (!input.allowPaidCall) throw new Error("open_analysis_paid_call_blocked");
@@ -62,7 +63,7 @@ export async function searchShoppingIdentity(input: {
     now: input.now,
     cycleId: input.cycleId,
   });
-  const budget = new ProviderRequestBudget(input.fetchImpl, 8, 1, 5_000, {
+  const budget = new ProviderRequestBudget(input.fetchImpl, 8, 1, input.requestTimeoutMs ?? 5_000, {
     canRequest: () => clock() < deadlineAt,
     processPaidOperationGuard: input.processPaidOperationGuard,
   });

@@ -1,5 +1,3 @@
-import path from "node:path";
-
 export const APPROVED_DATAFORSEO_ORIGIN = "https://api.dataforseo.com";
 export const DEFAULT_ALPHA_JOB_DEADLINE_MS = 55_000;
 
@@ -69,8 +67,8 @@ export function readPrivateAlphaRuntimeConfig(
   const reviewsLive = reviewsMode === "live";
   const analysisEnabled = env.TRENDIQ_ANALYSIS_ENABLED === "true";
   const openAnalysisEnabled = env.TRENDIQ_OPEN_ANALYSIS_ENABLED === "true";
-  const configuredDataDir = env.TRENDIQ_DATA_DIR?.trim();
-  const openAnalysisDataDir = configuredDataDir || path.join(process.cwd(), ".trendiq");
+  // No cwd/.trendiq fallback. An unset or blank directory fails closed in the spend store.
+  const openAnalysisDataDir = env.TRENDIQ_DATA_DIR?.trim() ?? "";
   const paidOperationCeiling = parsePositiveInteger(env.TRENDIQ_PROCESS_MAX_PAID_OPERATIONS);
   const configuredDeadline = env.TRENDIQ_ANALYSIS_JOB_DEADLINE_MS;
   const jobDeadlineMs = configuredDeadline === undefined

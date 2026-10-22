@@ -10,7 +10,7 @@ import {
 import { DATAFORSEO_GOOGLE_SHOPPING_PRODUCTS_TASK_POST_PATH } from "../../../../app/lib/data/reviews/client";
 import { dispatchProductAnalysisApi } from "../../productAnalysisApi";
 import { OPEN_PRODUCT_BATTERY, type OpenProductBatteryCase } from "../../fixtures/openProductBattery/v1/battery";
-import { OpenAnalysisFileStore } from "../fileStore";
+import { OpenAnalysisFileStore, provisionOpenAnalysisStore } from "../fileStore";
 import { createProductAnalysisRuntime } from "../../../runtime/productAnalysisRuntime";
 import { APPROVED_DATAFORSEO_ORIGIN } from "../../../runtime/runtimeConfig";
 import { ProcessPaidOperationGuard } from "../../../runtime/processPaidOperationGuard";
@@ -151,6 +151,7 @@ describe("open analysis offline flow", () => {
       throw new Error("live_network_forbidden");
     });
     const dataDir = await tempDir();
+    await provisionOpenAnalysisStore(dataDir);
     const runtime = createProductAnalysisRuntime({
       env: readyEnv(dataDir),
       assetsReady: () => true,
@@ -192,6 +193,7 @@ describe("open analysis offline flow", () => {
       throw new Error("live_network_forbidden");
     });
     const dataDir = await tempDir();
+    await provisionOpenAnalysisStore(dataDir);
     const calls: string[] = [];
     const inner = router("rich");
     const fetchImpl: FetchLike = async (url, init) => {
@@ -240,6 +242,7 @@ describe("open analysis offline flow", () => {
     });
     for (const id of ["anker-soundcore-q45", "framework-laptop-13", "teenage-engineering-op1"]) {
       const dataDir = await tempDir();
+      await provisionOpenAnalysisStore(dataDir);
       const runtime = createProductAnalysisRuntime({
         env: readyEnv(dataDir),
         assetsReady: () => true,
