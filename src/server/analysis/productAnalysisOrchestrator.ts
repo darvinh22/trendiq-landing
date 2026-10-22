@@ -37,6 +37,8 @@ interface AnalysisJob {
   createdAtMs: number;
   response: ProductAnalysisResponse;
   work: Promise<void>;
+  /** Open-analysis listeners joined to this job. Catalog jobs leave this unset. */
+  settlers?: Array<(response: ProductAnalysisResponse) => void | Promise<void>>;
 }
 
 export interface ResolvedAnalysisOptions {
@@ -194,6 +196,17 @@ export class ProductAnalysisOrchestrator {
       return { status: "error", reason: "invalid_request" };
     }
     this.pruneExpiredJobs();
+    const existingId = this.activeByProduct.get(profile.productId);
+    const existing = existingId ? this.jobs.get(existingId) : undefined;
+    if (existing) {
+      // A second caller for this product joins the job already in flight.
+      // That does not start another provider execution.
+      if (existing.response.status === "pending" && options.onSettled && existing.settlers) {
+        existing.settlers.push(options.onSettled);
+      }
+      return redactApplicationResponse(existing.response, existing.productId);
+    }
+
     const analysisId = this.idFactory();
     if (!/^analysis_[A-Za-z0-9_-]{8,128}$/.test(analysisId) || this.jobs.has(analysisId)) {
       return { status: "error", reason: "analysis_failed" };
@@ -210,6 +223,7 @@ export class ProductAnalysisOrchestrator {
       createdAtMs: this.now().getTime(),
       response: pending,
       work: Promise.resolve(),
+      settlers: options.onSettled ? [options.onSettled] : [],
     };
     this.jobs.set(analysisId, job);
     this.activeByProduct.set(profile.productId, analysisId);
@@ -249,9 +263,13 @@ export class ProductAnalysisOrchestrator {
         const presented = this.presentOpenProduct(response, profile, options, startedAt);
         const redacted = redactApplicationResponse(presented, job.productId);
         // Persist before publishing. Callers that poll status, and callers that
-        // await job.work, both observe settlement only after the ledger write
-        // and its flock helper have finished.
-        await options.onSettled?.(redacted);
+        // await job.work, both observe settlement only after every joined
+        // ledger write and its flock helper have finished. Listeners added
+        // while an earlier listener is still writing are included.
+        const settlers = job.settlers ?? [];
+        for (let index = 0; index < settlers.length; index += 1) {
+          await settlers[index](redacted);
+        }
         job.response = redacted;
         const completedAt = this.now().toISOString();
         const finalStatus = redacted.status === "pending" ? "error" : redacted.status;

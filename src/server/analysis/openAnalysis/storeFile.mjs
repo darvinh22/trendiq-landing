@@ -358,12 +358,23 @@ export async function acquireStoreLock(lockPath, waitMs = 10_000) {
     for (;;) {
       try {
         await link(tmp, lockPath);
-        const owned = await ownLock(lockPath, token);
+        const owned = await ownLock(lockPath, token, Math.max(0, waitMs - (Date.now() - started)));
         if (owned) return owned;
         if (Date.now() - started > waitMs) throw new Error("open_analysis_store_lock_timeout");
         await delay(20);
         continue;
       } catch (error) {
+        if (error instanceof OpenAnalysisStoreError && error.message === "open_analysis_flock_missing") {
+          // flock never ran, so this process does not hold the inode. Drop
+          // only the lock file this attempt just created.
+          releaseOwnUnflockedLock(lockPath, token);
+          throw error;
+        }
+        if (error?.message === "open_analysis_store_lock_timeout") {
+          // The helper gave up while waiting. Do not unlink: another process
+          // may hold this inode, and releasing it would open a spend gap.
+          throw error;
+        }
         if (error.code === "ENOENT") {
           await writeSynced(tmp, body());
         } else if (error.code !== "EEXIST") {
@@ -380,7 +391,7 @@ export async function acquireStoreLock(lockPath, waitMs = 10_000) {
   }
 }
 
-async function ownLock(lockPath, token) {
+async function ownLock(lockPath, token, waitMs) {
   let fd;
   try {
     fd = openSync(lockPath, "r");
@@ -390,7 +401,7 @@ async function ownLock(lockPath, token) {
   }
   let held;
   try {
-    held = await holdFdLock(fd, false);
+    held = await holdFdLock(fd, false, waitMs);
   } catch (error) {
     closeQuiet(fd);
     throw error;
@@ -589,44 +600,58 @@ function snapshot(fd, lockPath) {
 }
 
 /**
- * Exclusive kernel lock on an already-open inode. `flock` does not create a
- * file because it receives the descriptor. Non-blocking failure means a live
- * holder owns the inode; the caller must not unlink it.
+ * Removes a lock this process just created when `flock` is not installed.
+ * The binary never ran, so this process does not hold the inode. Unlink only
+ * if the path still names that inode and the pid and token are still ours.
+ * A different identity is left alone.
  */
-function holdFdLock(fd, nonblock) {
+function releaseOwnUnflockedLock(lockPath, token) {
+  let fd;
+  try {
+    fd = openSync(lockPath, "r");
+  } catch (error) {
+    if (error.code === "ENOENT") return;
+    return;
+  }
+  try {
+    const first = snapshot(fd, lockPath);
+    const second = snapshot(fd, lockPath);
+    if (!ownsUnflocked(first, token) || !ownsUnflocked(second, token)) return;
+    if (first.parsed.token !== second.parsed.token || first.parsed.createdAt !== second.parsed.createdAt) return;
+    unlinkSync(lockPath);
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  } finally {
+    closeQuiet(fd);
+  }
+}
+
+function ownsUnflocked(snap, token) {
+  if (!snap || snap === "unreadable") return false;
+  return snap.parsed.pid === process.pid
+    && snap.parsed.token === token
+    && typeof snap.parsed.createdAt === "string"
+    && snap.parsed.createdAt.length > 0;
+}
+
+/**
+ * Exclusive kernel lock on an already-open inode. The helper is
+ * `flock -x 3` on the inherited descriptor, not a path named `3`, so it does
+ * not create a file. On success the helper exits and this process keeps the
+ * lock until `release` closes the descriptor. Non-blocking failure means a
+ * live holder owns the inode; the caller must not unlink it. The blocking
+ * helper gives up after `timeoutMs` (`flock -w`) and rejects. That path does
+ * not acquire the lock and does not close the caller's descriptor, so a hold
+ * another process already has is left in place.
+ */
+export function holdFdLock(fd, nonblock, timeoutMs = 10_000) {
   const args = [];
   if (nonblock) args.push("-n");
-  args.push("-x", "3", "sh", "-c", "printf ready\\n; exec cat >/dev/null");
-  const child = spawn("flock", args, { stdio: ["pipe", "pipe", "ignore", fd] });
+  else args.push("-w", String(Math.max(1, timeoutMs) / 1000));
+  args.push("-x", "3");
+  const child = spawn("flock", args, { stdio: ["ignore", "ignore", "ignore", fd] });
   return new Promise((resolve, reject) => {
-    let out = "";
     let settled = false;
-    const finish = (held) => {
-      if (settled) return;
-      settled = true;
-      if (!held) {
-        resolve(null);
-        return;
-      }
-      resolve({
-        async release() {
-          try {
-            child.stdin.end();
-          } catch {
-            // The helper may already be gone.
-          }
-          await new Promise((done) => {
-            if (child.exitCode !== null || child.signalCode) done();
-            else child.once("exit", () => done());
-          });
-          closeQuiet(fd);
-        },
-      });
-    };
-    child.stdout.on("data", (chunk) => {
-      out += chunk.toString();
-      if (out.includes("ready")) finish(true);
-    });
     child.once("error", (error) => {
       if (settled) return;
       settled = true;
@@ -636,7 +661,23 @@ function holdFdLock(fd, nonblock) {
       }
       reject(error);
     });
-    child.once("exit", () => finish(false));
+    child.once("exit", (code) => {
+      if (settled) return;
+      settled = true;
+      if (code === 0) {
+        resolve({
+          async release() {
+            closeQuiet(fd);
+          },
+        });
+        return;
+      }
+      if (!nonblock) {
+        reject(new Error("open_analysis_store_lock_timeout"));
+        return;
+      }
+      resolve(null);
+    });
   });
 }
 

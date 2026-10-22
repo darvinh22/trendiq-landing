@@ -167,7 +167,7 @@ live process holds.
 4. Check the inode. This does not create the file:
 
    ```text
-   flock -n 3 true 3<"$TRENDIQ_DATA_DIR/open-analysis.json.lock"
+   flock -n 3 3<"$TRENDIQ_DATA_DIR/open-analysis.json.lock"
    lsof "$TRENDIQ_DATA_DIR/open-analysis.json.lock"
    ```
 
@@ -175,16 +175,19 @@ live process holds.
    lock is held, stop.
 5. Confirm again that no store operation is in progress.
 6. Delete only the lock file. Leave `open-analysis.json` unchanged.
-7. Append one JSON line to `open-analysis-audit.log`. Do not truncate it:
+7. Append one JSON line to `open-analysis-audit.log`. This is append-only.
+   The command uses `>>`. Do not use `>`, and do not truncate the file:
 
    ```text
-   {"at":"<UTC ISO time>","action":"stale_lock_removed","pid":<pid>,"token":"<token>","createdAt":"<createdAt>","inodeCheck":"flock -n acquired; lsof empty"}
+   printf '%s\n' '{"at":"<UTC ISO time>","action":"stale_lock_removed","pid":<pid>,"token":"<token>","createdAt":"<createdAt>","inodeCheck":"flock -n acquired; lsof empty"}' >> "$TRENDIQ_DATA_DIR/open-analysis-audit.log"
    ```
 
 If the server reports `open_analysis_flock_missing`, the `flock` binary is
-not installed. That error does not zero the ledger and does not clear a lock.
-Install `flock` from util-linux, then use the steps above if a lock file is
-still present. See `docs/OPEN_ANALYSIS.md`.
+not installed. That error does not rewrite the ledger. The process removes
+only a lock file that same attempt created when the pid and token still
+match. A `flock` timeout does not remove a lock. Install `flock` from
+util-linux, then use the steps above if a lock file is still present. See
+`docs/OPEN_ANALYSIS.md`.
 
 Leave `TRENDIQ_OPEN_ANALYSIS_ENABLED` false until the directory exists, the
 ledger has been provisioned, and the single-replica limit above is in place.
