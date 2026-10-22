@@ -149,6 +149,43 @@ The script does not call DataForSEO. It keeps the reservation, marks it
 reconciled, and appends one line to `open-analysis-audit.log`. Do not hand-edit
 `open-analysis.json`. See `docs/OPEN_ANALYSIS.md`.
 
+## Recovering a stale open-analysis lock
+
+Stop and verify before touching the lock file. Never delete a lock that a
+live process holds.
+
+1. Stop the one TrendIQ replica. Confirm the process list and the platform
+   show no Node server, no container, and no provision or reconcile script
+   using `TRENDIQ_DATA_DIR`.
+2. PID 1 is a special case. Containers often run the server as PID 1. After a
+   restart the new process is also PID 1, so `kill -0 1` succeeds and a stale
+   lock looks live. Compare the lock `createdAt` with the current process or
+   container start time. A matching pid that started later is not the owner.
+   Do not remove the lock while that replica is running.
+3. Read `pid`, `token`, and `createdAt` from
+   `$TRENDIQ_DATA_DIR/open-analysis.json.lock`.
+4. Check the inode. This does not create the file:
+
+   ```text
+   flock -n 3 true 3<"$TRENDIQ_DATA_DIR/open-analysis.json.lock"
+   lsof "$TRENDIQ_DATA_DIR/open-analysis.json.lock"
+   ```
+
+   Continue only when `flock` exits 0 and `lsof` prints no process. If the
+   lock is held, stop.
+5. Confirm again that no store operation is in progress.
+6. Delete only the lock file. Leave `open-analysis.json` unchanged.
+7. Append one JSON line to `open-analysis-audit.log`. Do not truncate it:
+
+   ```text
+   {"at":"<UTC ISO time>","action":"stale_lock_removed","pid":<pid>,"token":"<token>","createdAt":"<createdAt>","inodeCheck":"flock -n acquired; lsof empty"}
+   ```
+
+If the server reports `open_analysis_flock_missing`, the `flock` binary is
+not installed. That error does not zero the ledger and does not clear a lock.
+Install `flock` from util-linux, then use the steps above if a lock file is
+still present. See `docs/OPEN_ANALYSIS.md`.
+
 Leave `TRENDIQ_OPEN_ANALYSIS_ENABLED` false until the directory exists, the
 ledger has been provisioned, and the single-replica limit above is in place.
 Spend counters, identity cache, and open-analysis jobs live in that file.

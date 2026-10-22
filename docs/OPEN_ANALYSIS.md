@@ -158,6 +158,48 @@ keeps the record, and appends one JSON line to `open-analysis-audit.log`.
 The same command again is idempotent and does not apply the cost a second
 time. The audit log is append-only.
 
+## Recovering a stale lock
+
+Do this only after the checks below. The process never deletes a lock whose
+pid is alive, and it never deletes a lock it cannot flock. A missing `flock`
+binary fails closed with `open_analysis_flock_missing` and does not clear the
+ledger or the lock. Install `flock` from util-linux. Do not delete
+`open-analysis.json` to get past that error.
+
+1. Stop the single TrendIQ replica and confirm it is gone. Check the process
+   list and the platform replica count. Include `node`, the container, and
+   any `provision-open-analysis-store.mjs` or `reconcile-open-analysis.mjs`
+   process. Nothing that opens `TRENDIQ_DATA_DIR` may still be running.
+2. In a container the application is often PID 1. `kill -0 1` succeeding does
+   not mean the process that wrote the lock is still alive. A new container
+   reuses PID 1, so a stale lock looks live. Compare the lock's `createdAt`
+   with the start time of the current PID (`ps -o lstart= -p <pid>`, or the
+   container start time). A pid that is alive but started after `createdAt`
+   is a different process. Still do not remove the lock until this replica
+   is stopped.
+3. Read `open-analysis.json.lock`. It is JSON with `pid`, `token`, and
+   `createdAt`. Write those three values down before changing anything.
+4. Prove the inode is not held. This open does not create the file:
+
+   ```text
+   flock -n 3 true 3<"$TRENDIQ_DATA_DIR/open-analysis.json.lock"
+   ```
+
+   Exit 0 means nobody holds the flock. Any other exit means it is held, or
+   `flock` is missing. `lsof "$TRENDIQ_DATA_DIR/open-analysis.json.lock"` must
+   show no process. If either check shows a holder, stop. Do not delete the
+   lock.
+5. Confirm no store operation is in progress: no TrendIQ process, and the
+   `flock -n` check above exited 0.
+6. Remove only `open-analysis.json.lock`. Do not edit or remove
+   `open-analysis.json`.
+7. Append one JSON line to `open-analysis-audit.log`. Do not rewrite or
+   truncate that file:
+
+   ```text
+   {"at":"<UTC ISO time>","action":"stale_lock_removed","pid":<pid>,"token":"<token>","createdAt":"<createdAt>","inodeCheck":"flock -n acquired; lsof empty"}
+   ```
+
 ## Concurrency and recovery tests
 
 `src/server/analysis/openAnalysis/__tests__/storeLockConcurrency.test.ts` runs

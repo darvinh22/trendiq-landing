@@ -120,6 +120,13 @@ export class ProductAnalysisRuntime implements OpenProductAnalysisApi {
     return this.orchestrator.getAnalysisStatus(analysisId);
   }
 
+  waitForSettled(analysisId: string): Promise<ProductAnalysisResponse> {
+    if (this.openService?.getAnalysisStatus(analysisId)) {
+      return this.openService.waitForSettled(analysisId);
+    }
+    return this.orchestrator.waitForSettled(analysisId);
+  }
+
   resolveOpenProduct(input: { query: string; clientKey?: string }) {
     const service = this.ensureOpenService();
     if (!service) {

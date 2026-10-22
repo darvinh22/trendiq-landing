@@ -266,8 +266,14 @@ export class OpenAnalysisService {
         failureSummary: () => tracker.dailyBlocked
           ? "Today's analysis capacity was reached before this result could be finished, so TrendIQ is not making a recommendation."
           : OPEN_ABSTENTION_SUMMARIES.budget,
-        onSettled: (response) => {
-          void this.finishJob(analysisId, prepared.profile, client, response).catch(() => undefined);
+        onSettled: async (response) => {
+          try {
+            await this.finishJob(analysisId, prepared.profile, client, response);
+          } catch {
+            // The pending response was already returned to the caller. The
+            // rejection is swallowed so the job can still publish, but only
+            // after this attempt finishes and releases the store lock.
+          }
         },
       });
       if (pending.status !== "pending") {
@@ -301,6 +307,10 @@ export class OpenAnalysisService {
     const live = this.orchestrator.getAnalysisStatus(analysisId);
     if (!(live.status === "unavailable" && live.reason === "analysis_not_found")) return live;
     return null;
+  }
+
+  waitForSettled(analysisId: string): Promise<ProductAnalysisResponse> {
+    return this.orchestrator.waitForSettled(analysisId);
   }
 
   async readSettledJob(analysisId: string): Promise<ProductAnalysisResponse | null> {

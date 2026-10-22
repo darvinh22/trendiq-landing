@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -111,5 +111,12 @@ describe("open analysis client identity", () => {
     expect(blocked).toEqual({ status: "unavailable", reason: "rate_limited" });
     expect(collect).toHaveBeenCalledTimes(1);
     release();
+    if (started.status !== "pending") throw new Error("expected pending");
+    // release() lets the blocked collector finish. The job then writes the
+    // ledger (lock temp, ledger temp, and a flock helper). That write is part
+    // of the job; waiting here finishes it before the temp directory is removed.
+    const settled = await service.waitForSettled(started.analysisId);
+    expect(settled.status).not.toBe("pending");
+    expect((await readdir(dataDir)).filter((name) => name.endsWith(".tmp") || name.endsWith(".lock"))).toEqual([]);
   });
 });

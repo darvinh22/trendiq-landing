@@ -44,7 +44,8 @@ export interface ResolvedAnalysisOptions {
   evidenceNotes?: () => string[];
   forceAbstention?: () => boolean;
   failureSummary?: () => string;
-  onSettled?: (response: ProductAnalysisResponse) => void;
+  /** Joined to the job. The in-memory status stays pending until this settles. */
+  onSettled?: (response: ProductAnalysisResponse) => void | Promise<void>;
 }
 
 export interface ProductAnalysisOrchestratorOptions {
@@ -244,11 +245,16 @@ export class ProductAnalysisOrchestrator {
           resolveRace(response);
         });
     }))
-      .then((response) => {
+      .then(async (response) => {
         const presented = this.presentOpenProduct(response, profile, options, startedAt);
-        job.response = redactApplicationResponse(presented, job.productId);
+        const redacted = redactApplicationResponse(presented, job.productId);
+        // Persist before publishing. Callers that poll status, and callers that
+        // await job.work, both observe settlement only after the ledger write
+        // and its flock helper have finished.
+        await options.onSettled?.(redacted);
+        job.response = redacted;
         const completedAt = this.now().toISOString();
-        const finalStatus = job.response.status === "pending" ? "error" : job.response.status;
+        const finalStatus = redacted.status === "pending" ? "error" : redacted.status;
         this.logger.log({
           event: "analysis_settled",
           analysisId,
@@ -259,11 +265,10 @@ export class ProductAnalysisOrchestrator {
           durationMs: Math.max(0, this.clockMs() - startedAtMs),
           ...latestUsage,
           finalStatus,
-          ...(job.response.status === "unavailable" || job.response.status === "error"
-            ? { reason: job.response.reason }
+          ...(redacted.status === "unavailable" || redacted.status === "error"
+            ? { reason: redacted.reason }
             : {}),
         });
-        options.onSettled?.(job.response);
       });
 
     return pending;

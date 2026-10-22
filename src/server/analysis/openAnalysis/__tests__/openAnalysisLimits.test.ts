@@ -660,11 +660,7 @@ describe("shared resolution and analysis cycle", () => {
     const started = await service.analyzeResolution({ resolutionId: resolved.body.resolutionId, clientKey: "client-a" });
     expect(started.status).toBe("pending");
     if (started.status !== "pending") throw new Error("expected pending");
-    for (let attempt = 0; attempt < 30; attempt += 1) {
-      const status = service.getAnalysisStatus(started.analysisId);
-      if (status && status.status !== "pending") break;
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
+    await waitFor(service, started.analysisId);
     expect(urls.some((url) => url.includes("dataforseo_trends") || url.includes("google_ads"))).toBe(false);
     const document = await new OpenAnalysisFileStore(dataDir).read();
     const cycle = Object.values(document.cycles)[0];
@@ -691,10 +687,7 @@ describe("disabled live validation script", () => {
 });
 
 async function waitFor(service: OpenAnalysisService, analysisId: string) {
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    const status = service.getAnalysisStatus(analysisId);
-    if (status && status.status !== "pending") return status;
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  throw new Error(`analysis ${analysisId} did not settle`);
+  const settled = await service.waitForSettled(analysisId);
+  if (settled.status === "pending") throw new Error(`analysis ${analysisId} did not settle`);
+  return settled;
 }

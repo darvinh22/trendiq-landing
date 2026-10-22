@@ -69,6 +69,26 @@ function waitForLine(args: string[], line: string): Promise<void> {
 }
 
 describe("open analysis lock across processes", () => {
+  it("reports a missing flock binary and does not rewrite the ledger", async () => {
+    const dataDir = await readyDir();
+    const ledgerPath = join(dataDir, STORE_FILE_NAME);
+    const before = await readFile(ledgerPath, "utf8");
+    const previous = process.env.PATH;
+    process.env.PATH = dataDir;
+    try {
+      await expect(new OpenAnalysisFileStore(dataDir).update((document) => {
+        document.resolveCountByDay["2026-10-21"] = 9;
+      })).rejects.toMatchObject({
+        name: "OpenAnalysisStoreError",
+        message: "open_analysis_flock_missing",
+      });
+    } finally {
+      if (previous === undefined) delete process.env.PATH;
+      else process.env.PATH = previous;
+    }
+    expect(await readFile(ledgerPath, "utf8")).toBe(before);
+  });
+
   it("keeps an exact counter when four processes increment together", async () => {
     const dataDir = await readyDir();
     const processes = 4;

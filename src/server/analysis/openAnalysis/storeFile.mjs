@@ -630,6 +630,10 @@ function holdFdLock(fd, nonblock) {
     child.once("error", (error) => {
       if (settled) return;
       settled = true;
+      if (error?.code === "ENOENT") {
+        reject(new OpenAnalysisStoreError("open_analysis_flock_missing"));
+        return;
+      }
       reject(error);
     });
     child.once("exit", () => finish(false));

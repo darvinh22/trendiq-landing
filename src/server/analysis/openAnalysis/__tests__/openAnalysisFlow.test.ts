@@ -137,12 +137,9 @@ async function tempDir(): Promise<string> {
 }
 
 async function settle(runtime: ReturnType<typeof createProductAnalysisRuntime>, analysisId: string) {
-  for (let attempt = 0; attempt < 40; attempt += 1) {
-    const status = runtime.getAnalysisStatus(analysisId);
-    if (status.status !== "pending") return status;
-    await new Promise((resolve) => setTimeout(resolve, 15));
-  }
-  throw new Error(`analysis ${analysisId} did not settle`);
+  const settled = await runtime.waitForSettled(analysisId);
+  if (settled.status === "pending") throw new Error(`analysis ${analysisId} did not settle`);
+  return settled;
 }
 
 describe("open analysis offline flow", () => {
