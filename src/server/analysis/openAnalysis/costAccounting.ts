@@ -290,8 +290,13 @@ function isPostSendUnknown(error: unknown): boolean {
   return /ECONNRESET|ECONNABORTED|EPIPE|ETIMEDOUT|socket hang up|socket_reset|ECONNREFUSED|aborted|interrupted/i.test(message);
 }
 
-/** A paid POST response is unknown unless a finite cost, including zero, is explicit on a non-error status. */
+/**
+ * A paid POST stays unknown when the status is 5xx, the status is 4xx without
+ * an explicit zero cost, or a 2xx body has no finite cost. A 5xx `cost` is not
+ * proof, including zero. A 4xx or 2xx cost of zero is proof of no consumption.
+ */
 function paidResultIsUnknown(response: ReplayResponse): boolean {
+  if (response.status >= 500) return true;
   if (response.costMicros === 0) return false;
   if (response.status >= 400) return true;
   return response.costMicros === null;
@@ -402,7 +407,7 @@ export function estimateOpenAnalysisSpend(): OpenAnalysisSpendEstimate {
       "Estimate from the code paths in productionEvidenceCollector and the resolve shopping search, priced from public DataForSEO list pages. Not a bill.",
       "Task GET polls reserve $0 and then add the response cost field when present.",
       "A refusal before the request is sent still reserves the list-price estimate so a retry cannot spend the cap twice.",
-      "After the POST is sent, a timeout, connection reset, HTTP 5xx, or any result that does not prove zero consumption stays an unknown hold. That hold blocks every UTC day and every cycle until an explicit reconciliation. It is not deleted.",
+      "After the POST is sent, a timeout, connection reset, or any HTTP 5xx stays an unknown hold even when the body reports cost 0. A 4xx or 2xx cost of exactly 0 is the proof of no consumption. The unknown hold blocks every UTC day and every cycle until explicit reconciliation. It is not deleted.",
       "A call is not started unless the published list price still fits in both the resolution+analysis cycle ($0.15) and the UTC day the reservation is made ($3).",
       "Resolve and analysis share one cycle ledger. There is no separate $0.002 allowance on top of $0.15.",
       "Returned provider cost can exceed the published list price. That overage is recorded on the reservation's original UTC day and can put the cycle or the day above the limit. This is not a hard invoice cap. See docs/OPEN_ANALYSIS.md.",

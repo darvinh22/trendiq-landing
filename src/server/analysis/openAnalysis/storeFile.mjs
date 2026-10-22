@@ -6,7 +6,9 @@
  * the same functions, so the process and the reconcile script share one lock
  * and one reconciliation path. This file does not contact a provider.
  */
+import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { closeSync, fstatSync, openSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { link, open, readdir, readFile, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
 
@@ -15,9 +17,10 @@ export const STORE_FILE_NAME = "open-analysis.json";
 export const PROVISION_MARKER_NAME = "open-analysis.provisioned";
 export const AUDIT_LOG_NAME = "open-analysis-audit.log";
 /**
- * A lock older than this may be taken only after its pid, createdAt, and token
- * are checked again. A fresh lock is held even when its pid is already dead.
- * This is still one host: another machine does not share this pid table.
+ * A lock may be removed only when it is older than this and its pid is not
+ * alive on this host (`kill(pid, 0)`). A live pid is never taken, and a fresh
+ * lock is held even when its pid is already dead. Token is read again before
+ * any unlink. The lock file is never renamed. This is still one host.
  */
 export const LOCK_STALE_MS = 60_000;
 const USD_MICROS = 1_000_000;
@@ -337,7 +340,9 @@ async function writeSynced(filePath, contents) {
 
 /**
  * Creates the lock by linking a temp file onto the lock path. `link` fails
- * with EEXIST instead of replacing an existing lock. Rename would overwrite.
+ * with EEXIST instead of replacing an existing lock. The caller then holds an
+ * exclusive kernel flock on that inode until release. The lock file is never
+ * renamed, so a third process cannot create a second lock in a gap.
  */
 export async function acquireStoreLock(lockPath, waitMs = 10_000) {
   const token = randomBytes(16).toString("hex");
@@ -353,7 +358,11 @@ export async function acquireStoreLock(lockPath, waitMs = 10_000) {
     for (;;) {
       try {
         await link(tmp, lockPath);
-        return { path: lockPath, token, pid: process.pid };
+        const owned = await ownLock(lockPath, token);
+        if (owned) return owned;
+        if (Date.now() - started > waitMs) throw new Error("open_analysis_store_lock_timeout");
+        await delay(20);
+        continue;
       } catch (error) {
         if (error.code === "ENOENT") {
           await writeSynced(tmp, body());
@@ -371,104 +380,268 @@ export async function acquireStoreLock(lockPath, waitMs = 10_000) {
   }
 }
 
+async function ownLock(lockPath, token) {
+  let fd;
+  try {
+    fd = openSync(lockPath, "r");
+  } catch (error) {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  }
+  let held;
+  try {
+    held = await holdFdLock(fd, false);
+  } catch (error) {
+    closeQuiet(fd);
+    throw error;
+  }
+  if (!held) {
+    closeQuiet(fd);
+    return null;
+  }
+  const snap = snapshot(fd, lockPath);
+  if (!snap || snap === "unreadable" || snap.parsed.token !== token || snap.parsed.pid !== process.pid) {
+    await held.release();
+    return null;
+  }
+  return {
+    path: lockPath,
+    token,
+    pid: process.pid,
+    fd,
+    release: held.release,
+  };
+}
+
 async function maybeStealLock(lockPath) {
+  const observed = await readLockIdentity(lockPath);
+  if (observed === "absent") return true;
+  if (observed === "held") return false;
+  return commitStaleSteal(lockPath, observed);
+}
+
+/**
+ * Removes a stale lock whose owner pid is dead. Reads the token before taking
+ * the kernel lock and again before unlink. Does not rename or unlink a lock
+ * that is live, fresh, unreadable, or no longer the observed identity.
+ */
+export async function commitStaleSteal(lockPath, observed) {
+  const current = await readLockIdentity(lockPath);
+  if (current === "absent") return true;
+  if (current === "held") return false;
+  if (!sameIdentity(current, observed) || !isStaleDead(current)) return false;
+  let fd;
+  try {
+    fd = openSync(lockPath, "r");
+  } catch (error) {
+    if (error.code === "ENOENT") return true;
+    return false;
+  }
+  let held;
+  try {
+    held = await holdFdLock(fd, true);
+  } catch (error) {
+    closeQuiet(fd);
+    throw error;
+  }
+  if (!held) {
+    closeQuiet(fd);
+    return false;
+  }
+  try {
+    const snap = snapshot(fd, lockPath);
+    if (!snap || snap === "unreadable") return false;
+    if (!sameIdentity(snap.parsed, observed) || !isStaleDead(snap.parsed)) return false;
+    unlinkSync(lockPath);
+    return true;
+  } finally {
+    await held.release();
+  }
+}
+
+export async function releaseStoreLock(lock) {
+  if (!lock?.path || typeof lock.token !== "string") {
+    await lock?.release?.();
+    return;
+  }
+  const current = await readLockIdentity(lock.path);
+  if (current === "absent" || current === "held" || current.token !== lock.token || current.pid !== lock.pid) {
+    await lock?.release?.();
+    return;
+  }
+  if (lock.release) {
+    try {
+      const snap = typeof lock.fd === "number" ? snapshot(lock.fd, lock.path) : null;
+      if (snap && snap !== "unreadable" && snap.parsed.token === lock.token && snap.parsed.pid === lock.pid) {
+        unlinkSync(lock.path);
+      }
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    } finally {
+      await lock.release();
+    }
+    return;
+  }
+  let fd;
+  try {
+    fd = openSync(lock.path, "r");
+  } catch (error) {
+    if (error.code === "ENOENT") return;
+    return;
+  }
+  let held;
+  try {
+    held = await holdFdLock(fd, true);
+  } catch (error) {
+    closeQuiet(fd);
+    throw error;
+  }
+  if (!held) {
+    closeQuiet(fd);
+    return;
+  }
+  try {
+    const snap = snapshot(fd, lock.path);
+    if (snap && snap !== "unreadable" && snap.parsed.token === lock.token && snap.parsed.pid === lock.pid) {
+      unlinkSync(lock.path);
+    }
+  } finally {
+    await held.release();
+  }
+}
+
+async function readLockIdentity(lockPath) {
   let raw;
   try {
     raw = await readFile(lockPath, "utf8");
   } catch (error) {
-    if (error.code === "ENOENT") return true;
-    return false;
+    if (error.code === "ENOENT") return "absent";
+    return "held";
   }
   let parsed;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    return false;
+    return "held";
   }
-  if (!parsed || typeof parsed !== "object") return false;
+  if (!parsed || typeof parsed !== "object") return "held";
+  return {
+    pid: parsed.pid,
+    createdAt: typeof parsed.createdAt === "string" ? parsed.createdAt : "",
+    token: typeof parsed.token === "string" ? parsed.token : undefined,
+  };
+}
+
+function sameIdentity(parsed, observed) {
+  const createdAt = typeof parsed.createdAt === "string" ? parsed.createdAt : "";
+  const token = typeof parsed.token === "string" ? parsed.token : undefined;
+  return parsed.pid === observed.pid && createdAt === observed.createdAt && token === observed.token;
+}
+
+function isStaleDead(parsed) {
+  if (typeof parsed.pid !== "number" || !Number.isInteger(parsed.pid) || parsed.pid <= 0) return false;
   const createdAt = typeof parsed.createdAt === "string" ? parsed.createdAt : "";
   const created = Date.parse(createdAt);
-  if (!Number.isFinite(created)) return false;
-  if (Date.now() - created <= LOCK_STALE_MS) return false;
-  return commitStaleSteal(lockPath, {
-    pid: parsed.pid,
-    createdAt,
-    token: typeof parsed.token === "string" ? parsed.token : undefined,
-  });
+  if (!Number.isFinite(created) || Date.now() - created <= LOCK_STALE_MS) return false;
+  return !pidAlive(parsed.pid);
+}
+
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === "EPERM";
+  }
+}
+
+function snapshot(fd, lockPath) {
+  let fdStat;
+  try {
+    fdStat = fstatSync(fd);
+  } catch {
+    return null;
+  }
+  let pathStat;
+  try {
+    pathStat = statSync(lockPath);
+  } catch (error) {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  }
+  if (pathStat.ino !== fdStat.ino || pathStat.dev !== fdStat.dev) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(lockPath, "utf8"));
+  } catch {
+    return "unreadable";
+  }
+  let after;
+  try {
+    after = statSync(lockPath);
+  } catch (error) {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  }
+  if (after.ino !== fdStat.ino || after.dev !== fdStat.dev) return null;
+  if (!parsed || typeof parsed !== "object") return "unreadable";
+  return { parsed };
 }
 
 /**
- * Moves the lock aside and deletes it only when pid, createdAt, and token still
- * match the stale identity. A replacement is linked back.
+ * Exclusive kernel lock on an already-open inode. `flock` does not create a
+ * file because it receives the descriptor. Non-blocking failure means a live
+ * holder owns the inode; the caller must not unlink it.
  */
-export async function commitStaleSteal(lockPath, observed) {
-  const grave = `${lockPath}.${process.pid}.${randomBytes(8).toString("hex")}.grave`;
-  try {
-    await rename(lockPath, grave);
-  } catch (error) {
-    if (error.code === "ENOENT") return true;
-    return false;
-  }
-  let matches = false;
-  try {
-    const parsed = JSON.parse(await readFile(grave, "utf8"));
-    const createdAt = typeof parsed.createdAt === "string" ? parsed.createdAt : "";
-    const created = Date.parse(createdAt);
-    const token = typeof parsed.token === "string" ? parsed.token : undefined;
-    matches = Number.isFinite(created) &&
-      Date.now() - created > LOCK_STALE_MS &&
-      parsed.pid === observed.pid &&
-      createdAt === observed.createdAt &&
-      token === observed.token;
-  } catch {
-    matches = false;
-  }
-  if (matches) {
-    await rm(grave, { force: true });
-    return true;
-  }
-  await restoreFile(grave, lockPath);
-  return false;
+function holdFdLock(fd, nonblock) {
+  const args = [];
+  if (nonblock) args.push("-n");
+  args.push("-x", "3", "sh", "-c", "printf ready\\n; exec cat >/dev/null");
+  const child = spawn("flock", args, { stdio: ["pipe", "pipe", "ignore", fd] });
+  return new Promise((resolve, reject) => {
+    let out = "";
+    let settled = false;
+    const finish = (held) => {
+      if (settled) return;
+      settled = true;
+      if (!held) {
+        resolve(null);
+        return;
+      }
+      resolve({
+        async release() {
+          try {
+            child.stdin.end();
+          } catch {
+            // The helper may already be gone.
+          }
+          await new Promise((done) => {
+            if (child.exitCode !== null || child.signalCode) done();
+            else child.once("exit", () => done());
+          });
+          closeQuiet(fd);
+        },
+      });
+    };
+    child.stdout.on("data", (chunk) => {
+      out += chunk.toString();
+      if (out.includes("ready")) finish(true);
+    });
+    child.once("error", (error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    });
+    child.once("exit", () => finish(false));
+  });
 }
 
-export async function releaseStoreLock(lock) {
-  if (!lock?.path || typeof lock.token !== "string") return;
-  let current;
+function closeQuiet(fd) {
   try {
-    current = JSON.parse(await readFile(lock.path, "utf8"));
-  } catch (error) {
-    if (error.code === "ENOENT") return;
-    return;
-  }
-  if (!current || current.token !== lock.token || current.pid !== lock.pid) return;
-  const grave = `${lock.path}.${process.pid}.${lock.token}.release`;
-  try {
-    await rename(lock.path, grave);
-  } catch (error) {
-    if (error.code === "ENOENT") return;
-    throw error;
-  }
-  let owned = false;
-  try {
-    const parsed = JSON.parse(await readFile(grave, "utf8"));
-    owned = parsed.token === lock.token && parsed.pid === lock.pid;
+    closeSync(fd);
   } catch {
-    owned = false;
+    // Already closed with the kernel lock.
   }
-  if (owned) {
-    await rm(grave, { force: true });
-    return;
-  }
-  await restoreFile(grave, lock.path);
-}
-
-async function restoreFile(grave, lockPath) {
-  try {
-    await link(grave, lockPath);
-  } catch (error) {
-    if (error.code !== "EEXIST") throw error;
-  }
-  await rm(grave, { force: true });
 }
 
 function delay(ms) {

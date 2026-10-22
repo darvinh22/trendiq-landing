@@ -10,14 +10,14 @@ alpha. It does not describe a public or multi-replica deployment.
   map. The spend ledger is one JSON file guarded by a local lock file. The lock
   is not shared across hosts or NFS. Creation is a temp file plus `link`. A
   fresh lock stays held when its pid is dead, including across a restart or a
-  deploy overlap. An unreadable lock stays held. Takeover of a lock older than
-  60 seconds re-checks pid, `createdAt`, and token before removing it, and
-  release removes only the lock this process owns. A second replica can still
-  spend again. Do not add a second process, a second container, or a second
-  host against the same `TRENDIQ_DATA_DIR`. Disable auto-scaling and rolling
-  overlap so two application processes are never active at the same time.
-  After 60 seconds a lock whose owner is still alive can be taken; that window
-  is why overlap must stay disabled.
+  deploy overlap. An unreadable lock stays held. A live pid is never taken,
+  even after 60 seconds. Takeover requires a dead pid, age over 60 seconds,
+  the same token, and the kernel flock on that inode. The lock file is not
+  renamed. Release unlinks only the owner's pid and token while holding that
+  flock. A second replica can still spend again. Do not add a second process,
+  a second container, or a second host against the same `TRENDIQ_DATA_DIR`.
+  Disable auto-scaling and rolling overlap so two application processes are
+  never active at the same time. The host needs `flock` from util-linux.
 - Build with `npm run build` and start with `npm start`. Vite preview is not the
   production server.
 - `PORT` defaults to 3000. Leave `HOST` unset to listen on all interfaces, which
@@ -132,9 +132,10 @@ directory is missing, the ledger file is missing after it was provisioned, or
 the JSON is corrupt, open analysis refuses paid calls and does not write a
 replacement with counters at zero. After a paid POST, a timeout, connection
 reset, HTTP 5xx, or any result that does not prove zero consumption records an
-unknown cost. That hold blocks new paid calls on every UTC day and every cycle
-until it is reconciled. A restart does not clear it. A late response does not
-clear it by itself.
+unknown cost. HTTP 500 and above stay unknown even when the body says `cost`
+0. A 4xx response with `cost` 0 can clear the hold. The unknown hold blocks
+new paid calls on every UTC day and every cycle until it is reconciled. A
+restart does not clear it. A late response does not clear it by itself.
 
 Read the actual cost from DataForSEO billing or API usage for that UTC day.
 Match the task by time, endpoint, and task id. Use that row's USD cost, not

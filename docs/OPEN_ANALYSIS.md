@@ -31,11 +31,14 @@ cycle ledger. There is no separate identity allowance on top of the cycle limit.
   concurrency control. It is not safe on two replicas, two hosts, or NFS.
   Lock creation is a temp file plus `link`, which fails if the lock already
   exists. A fresh lock is held even when its pid is dead, so a restart or a
-  deploy overlap does not clear it. An unreadable lock is held. A lock older
-  than 60 seconds is removed only after a second check that its pid,
-  `createdAt`, and token are still the stale identity. Release removes a lock
-  only when that same pid and token still own it. A second replica can still
-  spend at the same time. Do not scale this service out.
+  deploy overlap does not clear it. An unreadable lock is held. A live pid is
+  never removed, including after 60 seconds (`kill(pid, 0)`). A dead pid's
+  lock is removed only when it is older than 60 seconds, the token still
+  matches, and this process holds the kernel flock on that inode. The lock
+  file is never renamed. Release unlinks only that same pid and token, and
+  only while it holds the flock, so another process cannot take the path in
+  between. A second replica can still spend at the same time. Do not scale
+  this service out.
 
 ### What the money control guarantees
 
@@ -48,10 +51,11 @@ price. It is not refunded and it is not moved to the next day. A crash leaves
 the reservation in place.
 
 After the POST is sent, a timeout, a connection reset or interrupted socket,
-an HTTP 5xx, or any other result that does not prove there was no billable
-consumption is `unknown`. An explicit cost of zero is that proof and clears
-the hold. A successful response with a finite `cost` records that cost. The
-list price is not booked as the final cost of an unknown hold.
+or any HTTP status 500 or higher is `unknown`. A 5xx body that reports `cost`
+0 is still unknown. It does not release the reservation. An explicit cost of
+zero on a 2xx or a 4xx is proof that nothing billable was consumed and can
+clear the hold. A successful 2xx response with a finite `cost` records that
+cost. The list price is not booked as the final cost of an unknown hold.
 
 An unknown hold blocks every new paid operation on every UTC day and every
 cycle until an explicit reconciliation. Restart does not clear it, and retention
@@ -126,8 +130,10 @@ process on one host. Creating `/var/lib/trendiq` on a production host needs
 root. This repository does not create that directory. See
 `docs/PRIVATE_ALPHA_OPERATIONS.md`.
 
-Runtime is Node `>=22.7.0 <23`. `.nvmrc` pins `22.23.4`. Install with
-`pnpm install --frozen-lockfile` (see `packageManager` in `package.json`).
+Runtime is Node `>=22.7.0 <23` and pnpm `>=10.33.4 <11`. `.nvmrc` pins
+`22.23.4`. `packageManager` is `pnpm@10.33.4`. Install with
+`pnpm install --frozen-lockfile`. `.github/workflows/ci.yml` uses that Node
+version, pnpm 10.33.4, and the frozen lockfile. It does not deploy.
 
 ## Reconciling an unknown hold
 

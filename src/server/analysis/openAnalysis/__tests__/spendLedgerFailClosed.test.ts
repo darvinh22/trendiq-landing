@@ -360,19 +360,27 @@ describe("unknown cost after a paid timeout", () => {
 });
 
 describe("open analysis file lock", () => {
-  it("takes over a stale lock held by a live pid", async () => {
+  it("does not take over a stale lock while its pid is alive", async () => {
     const dataDir = await readyDir();
     const lockPath = join(dataDir, `${STORE_FILE_NAME}.lock`);
-    await writeFile(lockPath, JSON.stringify({
+    const staleLive = JSON.stringify({
       pid: process.pid,
       createdAt: new Date(Date.now() - LOCK_STALE_MS - 1_000).toISOString(),
-    }));
-    const store = new OpenAnalysisFileStore(dataDir);
-    await store.update((document) => {
-      document.resolveCountByDay["2026-10-21"] = 4;
+      token: "live-stale",
     });
-    expect((await store.read()).resolveCountByDay["2026-10-21"]).toBe(4);
-    await expect(stat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await writeFile(lockPath, staleLive);
+    const store = new OpenAnalysisFileStore(dataDir, { lockWaitMs: 80 });
+    await expect(store.update((document) => {
+      document.resolveCountByDay["2026-10-21"] = 4;
+    })).rejects.toThrow("open_analysis_store_lock_timeout");
+    expect(await readFile(lockPath, "utf8")).toBe(staleLive);
+    const stolen = await commitStaleSteal(lockPath, JSON.parse(staleLive) as {
+      pid: number;
+      createdAt: string;
+      token: string;
+    });
+    expect(stolen).toBe(false);
+    expect(await readFile(lockPath, "utf8")).toBe(staleLive);
   });
 
   it("treats an unreadable lock and an unparseable timestamp as held", async () => {
@@ -511,13 +519,32 @@ describe("post-send cost classification", () => {
     }
   });
 
-  it("reconciles a 5xx that proves zero cost and still books a refusal from before the POST", async () => {
+  it("keeps HTTP 5xx unknown even when cost is 0, and a 4xx cost of 0 can clear", async () => {
     const now = new Date("2026-10-21T12:00:00.000Z");
-    const zeroDir = await settle(async () => jsonResponse({ cost: 0, tasks: [{ cost: 0 }] }, 500), "cycle_zero");
-    const zeroDoc = await new OpenAnalysisFileStore(zeroDir, { now: () => now }).read();
-    expect(dayReservations(zeroDoc, "2026-10-21")).toEqual({});
-    expect(zeroDoc.spendByDay["2026-10-21"]?.micros ?? 0).toBe(0);
-    const resumed = await new FileSpendLedger(new OpenAnalysisFileStore(zeroDir)).reserve(2_000, now, { cycleId: "cycle_ok" });
+    for (const status of [500, 502, 503]) {
+      const dataDir = await settle(
+        async () => jsonResponse({ cost: 0, tasks: [{ cost: 0 }] }, status),
+        `cycle_${status}`
+      );
+      const document = await new OpenAnalysisFileStore(dataDir, { now: () => now }).read();
+      const reservations = Object.values(dayReservations(document, "2026-10-21"));
+      expect(reservations).toHaveLength(1);
+      expect(reservations[0]?.costState).toBe("unknown");
+      expect(reservations[0]?.micros).toBe(2_000);
+      expect(document.spendByDay["2026-10-21"]?.micros).toBe(2_000);
+      const blocked = await new FileSpendLedger(new OpenAnalysisFileStore(dataDir)).reserve(
+        2_000,
+        new Date("2026-10-23T00:00:00.000Z"),
+        { cycleId: "cycle_after_5xx" }
+      );
+      expect(blocked).toEqual({ ok: false, micros: 0, reason: "unknown_cost" });
+    }
+
+    const clientDir = await settle(async () => jsonResponse({ cost: 0, tasks: [{ cost: 0 }] }, 400), "cycle_4xx");
+    const clientDoc = await new OpenAnalysisFileStore(clientDir, { now: () => now }).read();
+    expect(dayReservations(clientDoc, "2026-10-21")).toEqual({});
+    expect(clientDoc.spendByDay["2026-10-21"]?.micros ?? 0).toBe(0);
+    const resumed = await new FileSpendLedger(new OpenAnalysisFileStore(clientDir)).reserve(2_000, now, { cycleId: "cycle_ok" });
     expect(resumed.ok).toBe(true);
 
     const preSendDir = await settle(async () => {
