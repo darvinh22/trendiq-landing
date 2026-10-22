@@ -1,18 +1,24 @@
 import path from "node:path";
 import {
+  DEFAULT_JOB_DEADLINE_MS,
   STORE_FILE_NAME,
+  appendStoreAudit,
   provisionStore,
   readStoreDocument,
+  recoverExpiredPaidReservations,
   withStoreFile,
 } from "./storeFile.mjs";
 
 export {
   AUDIT_LOG_NAME,
+  DEFAULT_JOB_DEADLINE_MS,
   LOCK_STALE_MS,
   OpenAnalysisStoreError,
   PROVISION_MARKER_NAME,
   STORE_FILE_NAME,
+  appendStoreAudit,
   commitStaleSteal,
+  recoverExpiredPaidReservations,
   releaseStoreLock,
 } from "./storeFile.mjs";
 
@@ -101,6 +107,8 @@ export function emptyStoreDocument(): StoreDocument {
 export class OpenAnalysisFileStore {
   private chain: Promise<unknown> = Promise.resolve();
   private document: StoreDocument = emptyStoreDocument();
+  /** First locked operation of this process converts every unsettled paid hold. */
+  private startupRecoveryDone = false;
 
   constructor(
     private readonly directory: string,
@@ -119,6 +127,10 @@ export class OpenAnalysisFileStore {
     return this.options.lockWaitMs ?? 10_000;
   }
 
+  get jobDeadlineMs(): number {
+    return this.options.jobDeadlineMs ?? DEFAULT_JOB_DEADLINE_MS;
+  }
+
   async update<T>(mutator: (document: StoreDocument) => T | Promise<T>): Promise<T> {
     const run = this.chain.then(() => this.updateLocked(mutator));
     this.chain = run.then(() => undefined, () => undefined);
@@ -130,15 +142,37 @@ export class OpenAnalysisFileStore {
   }
 
   private async updateLocked<T>(mutator: (document: StoreDocument) => T | Promise<T>): Promise<T> {
-    return withStoreFile(this.directory, { lockWaitMs: this.lockWaitMs }, async (document: StoreDocument) => {
-      this.document = document;
-      const now = this.options.now?.() ?? new Date();
-      recoverInFlight(this.document, now, this.options.jobDeadlineMs ?? 55_000);
-      prune(this.document, now);
-      const result = await mutator(this.document);
-      prune(this.document, now);
-      return result;
-    });
+    const startup = !this.startupRecoveryDone;
+    let converted: string[] = [];
+    let convertedAt = "";
+    const result = await withStoreFile(
+      this.directory,
+      { lockWaitMs: this.lockWaitMs },
+      async (document: StoreDocument) => {
+        this.document = document;
+        const now = this.options.now?.() ?? new Date();
+        converted = recoverExpiredPaidReservations(document, now, this.jobDeadlineMs, {
+          convertAllReserved: startup,
+        });
+        convertedAt = now.toISOString();
+        recoverInFlight(this.document, now, this.jobDeadlineMs);
+        prune(this.document, now);
+        const value = await mutator(this.document);
+        prune(this.document, now);
+        return value;
+      },
+      async () => {
+        if (converted.length === 0) return;
+        await appendStoreAudit(this.directory, {
+          at: convertedAt,
+          action: "expire_reserved_to_unknown",
+          holdIds: converted,
+          reason: startup ? "process_startup" : "job_deadline_exceeded",
+        });
+      }
+    );
+    this.startupRecoveryDone = true;
+    return result;
   }
 }
 
@@ -156,8 +190,6 @@ function recoverInFlight(document: StoreDocument, now: Date, jobDeadlineMs: numb
     client.inFlightAnalysisId = null;
     client.inFlightSince = null;
   }
-  // Reservations stay in place after a crash or deadline. Unknown holds stay
-  // unknown across restarts until an explicit reconciliation.
 }
 
 function prune(document: StoreDocument, now: Date): void {

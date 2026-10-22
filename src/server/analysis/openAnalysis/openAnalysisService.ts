@@ -208,7 +208,7 @@ export class OpenAnalysisService {
         if (!this.canCallProvider()) return unavailable("runtime_not_ready");
         const gate = await this.store.update((document) => {
           const key = dayKey(this.now());
-          if (hasUnresolvedUnknownCost(document)) return "unknown" as const;
+          if (hasUnresolvedUnknownCost(document, this.now(), this.jobDeadlineMs)) return "unknown" as const;
           const remaining = OPEN_ANALYSIS_DAILY_MAX_MICROS - (document.spendByDay[key]?.micros ?? 0);
           if (remaining < PUBLISHED_PRICE_MICROS.shoppingProductsTaskPost) return "daily" as const;
           return "ok" as const;
@@ -247,7 +247,7 @@ export class OpenAnalysisService {
     const client = hashClient(input.clientKey);
     try {
       const prepared = await this.store.update((document) =>
-        prepareAnalysis(document, input, client, this.now())
+        prepareAnalysis(document, input, client, this.now(), this.jobDeadlineMs)
       );
       if (prepared.kind === "response") return prepared.response;
       const tracker = createAnalysisSpendTracker({
@@ -467,7 +467,7 @@ export class FileSpendLedger implements AnalysisSpendLedger {
       if (!document.cycles) document.cycles = {};
       if (!context?.cycleId) return { ok: false, micros: 0, reason: "cycle" };
       const key = dayKey(now);
-      if (hasUnresolvedUnknownCost(document)) {
+      if (hasUnresolvedUnknownCost(document, now, this.store.jobDeadlineMs)) {
         return { ok: false, micros: 0, reason: "unknown_cost" };
       }
       const day = daySpend(document, key);
@@ -540,11 +540,20 @@ function applyReservationCost(
   delete found.day.reservations[id];
 }
 
-/** Any unknown hold blocks every UTC day and every cycle until it is reconciled. */
-function hasUnresolvedUnknownCost(document: StoreDocument): boolean {
+/**
+ * An unknown hold, or a paid reservation still `reserved` after its job
+ * deadline, blocks every new paid call. That includes a second request for
+ * the same product. The hold stays until the reconcile script settles it.
+ */
+function hasUnresolvedUnknownCost(document: StoreDocument, now: Date, jobDeadlineMs: number): boolean {
+  const cutoff = now.getTime() - jobDeadlineMs;
   for (const spend of Object.values(document.spendByDay)) {
     for (const reservation of Object.values(spend.reservations)) {
       if (reservation.costState === "unknown") return true;
+      if (reservation.costState === "reconciled") continue;
+      if (!(reservation.micros > 0)) continue;
+      const created = Date.parse(reservation.createdAt);
+      if (!Number.isFinite(created) || created <= cutoff) return true;
     }
   }
   return false;
@@ -565,7 +574,8 @@ function prepareAnalysis(
   document: StoreDocument,
   input: { resolutionId: string; candidateId?: string },
   client: string,
-  now: Date
+  now: Date,
+  jobDeadlineMs: number
 ): PreparedAnalysis {
   const resolution = document.resolutions[input.resolutionId] as StoredResolution | undefined;
   if (!resolution || Date.parse(resolution.expiresAt) <= now.getTime()) {
@@ -590,7 +600,7 @@ function prepareAnalysis(
   window.dayAnalyses += 1;
   const cycleId = resolution.cycleId || `cycle_${input.resolutionId}`;
   const key = dayKey(now);
-  if (hasUnresolvedUnknownCost(document)) {
+  if (hasUnresolvedUnknownCost(document, now, jobDeadlineMs)) {
     window.hourAnalyses -= 1;
     window.dayAnalyses -= 1;
     return { kind: "response", response: { status: "unavailable", reason: "daily_capacity_reached" } };

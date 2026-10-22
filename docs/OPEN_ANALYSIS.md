@@ -47,8 +47,23 @@ that request. The reservation is refused when it would put the cycle over
 $0.15 or the UTC day of the reservation over $3. The reservation stays on that
 UTC day. A response that arrives after midnight is reconciled to the same day.
 A refusal before the POST is sent keeps the reservation at the published list
-price. It is not refunded and it is not moved to the next day. A crash leaves
-the reservation in place.
+price. It is not refunded and it is not moved to the next day. A crash after
+the reservation is written, including a crash after the paid POST and before
+the cost is marked unknown or reconciled, leaves that reservation `reserved`.
+
+The next locked ledger read converts a paid reservation that is still
+`reserved` and has no confirmed settlement into `unknown` when its job can no
+longer be running. On the first locked read after process start, that is every
+such reservation: the previous process and its deadline timer are gone. While
+this process stays up, the same conversion runs once the reservation is older
+than the job deadline (55 seconds unless `TRENDIQ_ANALYSIS_JOB_DEADLINE_MS`
+is set). The write is atomic under the existing file lock. It does not change
+the held amount and it does not delete the record. Running that recovery again
+does not change the hold a second time. Unknown records are never deleted by a
+restart or by retention. New paid calls stay blocked, including a second paid
+call for the same product, until the reconcile script matches the hold to the
+provider invoice. Do not hand-edit `open-analysis.json`. This is still one
+replica. It is not cross-replica deduplication.
 
 After the POST is sent, a timeout, a connection reset or interrupted socket,
 or any HTTP status 500 or higher is `unknown`. A 5xx body that reports `cost`
@@ -146,8 +161,16 @@ hand. Read the cost from the provider first:
    Use that row's cost in USD. Do not substitute the published list price.
 3. Build an evidence ref that identifies the row, with no line breaks, for
    example `task:<id> date:YYYY-MM-DD` or the billing transaction id.
-4. The hold id is the key under `spendByDay.<day>.reservations` whose
-   `costState` is `unknown`.
+4. The hold id is the key under `spendByDay.<day>.reservations`. Recovery
+   converts an orphaned paid `reserved` hold to `unknown`. The script resolves
+   that converted hold. If you run it before the process has done that
+   conversion, it converts that named paid `reserved` hold under the lock and
+   then reconciles it, including when the hold is younger than the job
+   deadline. Other paid `reserved` holds are converted only after the job
+   deadline. The script reads `TRENDIQ_ANALYSIS_JOB_DEADLINE_MS` when that
+   value is a whole number from 1000 to 120000. Otherwise the deadline is 55
+   seconds. A reconciled hold with the same evidence ref and the same micros
+   is left unchanged. Any other state is refused.
 
 ```text
 TRENDIQ_DATA_DIR=/var/lib/trendiq node scripts/reconcile-open-analysis.mjs <holdId> <providerCostUsd> "<evidenceRef>"
@@ -156,7 +179,9 @@ TRENDIQ_DATA_DIR=/var/lib/trendiq node scripts/reconcile-open-analysis.mjs <hold
 A successful run fsyncs the ledger, sets that reservation to `reconciled`,
 keeps the record, and appends one JSON line to `open-analysis-audit.log`.
 The same command again is idempotent and does not apply the cost a second
-time. The audit log is append-only.
+time. The audit log is append-only. A startup conversion also appends one
+line, `expire_reserved_to_unknown`, and does not append it again when recovery
+finds nothing left to convert.
 
 ## Recovering a stale lock
 
@@ -210,7 +235,10 @@ lock left by a restart, and stale takeover. `spendLedgerFailClosed.test.ts`
 covers a missing directory, a missing or corrupt ledger, unknown holds across
 UTC days, post-send errors, the reconcile script, and lock identity.
 `openAnalysisLimits.test.ts` covers parallel in-process increments and a fresh
-dead-pid lock that must not be taken. `rayBanMetaUnchanged` is the describe
+dead-pid lock that must not be taken. `paidReservationRecovery.test.ts` covers
+a crash after the paid POST, the restart refusal, reconcile of the converted
+hold, idempotent recovery, two recoverers racing a request, and fail-closed
+read, recovery, and write. `rayBanMetaUnchanged` is the describe
 name in `src/server/analysis/__tests__/rayBanMetaUnchanged.test.ts`.
 
 ## What this build does not do

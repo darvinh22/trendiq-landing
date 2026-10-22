@@ -94,7 +94,12 @@ to bypass the paid-operation ceiling.
   process and controlled window remain active, the server deduplicates that work.
 - A server restart makes old analysis IDs unavailable. After the operator has
   restored readiness and reviewed cost logs, the user may explicitly analyze
-  again; duplicate paid provider work is possible.
+  again; duplicate paid provider work is possible for the in-memory catalog
+  path.
+- An open-analysis restart does not start a second paid provider call while a
+  paid reservation from the previous process is still unsettled, or while an
+  unknown cost is unresolved. Reconcile that hold from the invoice before paid
+  calls can resume.
 - A browser polling timeout or server job deadline never starts a second
   analysis automatically. Results remain degraded or unavailable rather than
   being fabricated.
@@ -137,6 +142,17 @@ unknown cost. HTTP 500 and above stay unknown even when the body says `cost`
 new paid calls on every UTC day and every cycle until it is reconciled. A
 restart does not clear it. A late response does not clear it by itself.
 
+If the process stops after a paid POST and before that hold is marked
+`unknown` or reconciled, the reservation is still `reserved`. On the next
+start, the first locked ledger read converts every paid `reserved` hold with
+no confirmed settlement into `unknown`. While the process stays up, a later
+read converts a paid `reserved` hold that has sat past the job deadline.
+Neither step deletes the record, changes the held amount, or clears it on
+another restart. New paid calls stay blocked, including a second paid call for
+the same product, until you reconcile that hold with the script below. Do not
+edit the JSON by hand. This is one replica. It is not cross-replica
+deduplication.
+
 Read the actual cost from DataForSEO billing or API usage for that UTC day.
 Match the task by time, endpoint, and task id. Use that row's USD cost, not
 the published list price. Then:
@@ -145,9 +161,13 @@ the published list price. Then:
 TRENDIQ_DATA_DIR=/var/lib/trendiq node scripts/reconcile-open-analysis.mjs <holdId> <providerCostUsd> "task:<id> date:YYYY-MM-DD"
 ```
 
-The script does not call DataForSEO. It keeps the reservation, marks it
-reconciled, and appends one line to `open-analysis-audit.log`. Do not hand-edit
-`open-analysis.json`. See `docs/OPEN_ANALYSIS.md`.
+The script does not call DataForSEO. It resolves an `unknown` hold, including
+one startup recovery converted from `reserved`. If you run it before that
+startup read, it converts that named paid `reserved` hold under the lock and
+then reconciles it. It keeps the reservation, marks it reconciled, and appends
+one line to `open-analysis-audit.log`. A second run with the same evidence
+does not apply the cost again. Do not hand-edit `open-analysis.json`. See
+`docs/OPEN_ANALYSIS.md`.
 
 ## Recovering a stale open-analysis lock
 
