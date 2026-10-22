@@ -126,6 +126,12 @@ function safeReasonText(reason: ProductAnalysisUiReason): string {
   if (reason === "invalid_request") return "This analysis request could not be accepted.";
   if (reason === "product_binding_mismatch") return "This result could not be verified for the selected product.";
   if (reason === "request_failed") return "Something interrupted this request. You can try again.";
+  if (reason === "daily_capacity_reached") {
+    return "Today's analysis capacity has been reached. No new analysis was started.";
+  }
+  if (reason === "open_analysis_disabled") return "Analysis of a product by name is not available right now.";
+  if (reason === "rate_limited") return "Too many analyses were requested. No new analysis was started.";
+  if (reason === "resolution_not_found") return "That product choice expired. Enter the product name again.";
   return "This analysis could not be completed. Please come back later.";
 }
 

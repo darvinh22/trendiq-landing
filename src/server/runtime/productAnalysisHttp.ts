@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { handleProductAnalysisApiRequest } from "../analysis/productAnalysisApi";
+import { dispatchProductAnalysisApi } from "../analysis/productAnalysisApi";
 import type { ProductAnalysisRuntime } from "./productAnalysisRuntime";
 
 export const MAX_ANALYSIS_BODY_BYTES = 4096;
@@ -51,20 +51,57 @@ export async function handleProductAnalysisHttpRequest(
     return true;
   }
 
-  if (pathname !== "/api/product-analysis" && !pathname.startsWith("/api/product-analysis/")) {
+  if (
+    pathname !== "/api/product-resolve" &&
+    pathname !== "/api/product-analysis" &&
+    !pathname.startsWith("/api/product-analysis/")
+  ) {
     return false;
   }
 
   try {
     const body = request.method === "POST" ? await readJsonBody(request) : undefined;
-    const result = handleProductAnalysisApiRequest({
+    const result = await dispatchProductAnalysisApi({
       method: request.method ?? "GET",
       pathname,
       body,
+      clientKey: clientIdentity(request),
     }, runtime);
     sendJson(response, result.statusCode, result.body);
   } catch {
     sendJson(response, 400, { status: "error", reason: "invalid_request" });
   }
   return true;
+}
+
+function headerValue(request: { headers: IncomingMessage["headers"] }, name: string): string {
+  const raw = request.headers[name];
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  return value?.split(",")[0]?.trim() ?? "";
+}
+
+const LOOPBACK_PEERS = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
+
+/**
+ * Client key for open-analysis rate limits.
+ *
+ * The trusted proxy is the same-host reverse proxy that connects to this
+ * process on loopback (`HOST=127.0.0.1` or `::1`). That proxy must strip any
+ * inbound `cf-access-authenticated-user-email` and set the header itself from
+ * the edge access gate. Node trusts the header only when the TCP peer is
+ * loopback. `x-forwarded-for` is never a client identity: a caller who rotates
+ * it must not receive a new rate-limit bucket. A non-loopback peer is keyed
+ * only by its socket address, and both of those headers are ignored.
+ */
+export function clientIdentity(request: {
+  headers: IncomingMessage["headers"];
+  socket?: { remoteAddress?: string | null };
+}): string {
+  const peer = request.socket?.remoteAddress?.trim() || "";
+  if (LOOPBACK_PEERS.has(peer)) {
+    const email = headerValue(request, "cf-access-authenticated-user-email").toLowerCase();
+    if (email) return `access:${email}`;
+    return `peer:${peer}`;
+  }
+  return `peer:${peer || "anonymous"}`;
 }

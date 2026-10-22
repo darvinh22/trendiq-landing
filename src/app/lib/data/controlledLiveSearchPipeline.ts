@@ -6,8 +6,10 @@ import {
   resolveProductQuery,
   buildSignalExecutionPlan,
 } from "./capabilities";
+import { buildDynamicProductReadinessReport } from "./capabilities/evaluator";
 import { buildProductTrendSnapshotFromSignals } from "./snapshotEngine";
 import type {
+  ProductProfile,
   ProductResolutionResult,
   ProviderIdentityDiscoveryResult,
   SignalExecutionApproval,
@@ -31,6 +33,11 @@ export interface ControlledLiveSearchApprovalContext {
 
 export interface RunControlledLiveSearchToScoreOptions {
   query: string;
+  /**
+   * When the shopper already confirmed a stored profile, that profile is the
+   * only identity. The pipeline must not call resolveProductQuery again.
+   */
+  confirmedProfile?: ProductProfile;
   approvals?: readonly SignalExecutionApproval[];
   approve?: (
     context: ControlledLiveSearchApprovalContext
@@ -156,12 +163,37 @@ export function createScopedSignalExecutionApproval(input: {
   };
 }
 
+function resolutionForConfirmedProfile(profile: ProductProfile, timestamp: string): ProductResolutionResult {
+  return {
+    resolution: {
+      originalQuery: profile.query,
+      normalizedQuery: profile.query,
+      canonicalTitle: profile.canonicalTitle,
+      brand: profile.brand,
+      inferredProductType: profile.productType ?? "hardware",
+      category: profile.category,
+      modelGeneration: profile.modelGeneration,
+      aliases: [...profile.aliases],
+      identityConfidence: profile.identityConfidence,
+      resolutionSource: "provider_resolution",
+      warnings: [],
+    },
+    profile,
+    readiness: buildDynamicProductReadinessReport(profile),
+    cacheStatus: "disabled",
+    cacheKey: `confirmed:${profile.productId}`,
+    expiresAt: timestamp,
+  };
+}
+
 export async function runControlledLiveSearchToScore(
   options: RunControlledLiveSearchToScoreOptions
 ): Promise<ControlledLiveSearchToScoreResult> {
   const now = stableNow(options.now);
   const timestamp = now().toISOString();
-  const resolution = await resolveProductQuery(options.query, { now });
+  const resolution = options.confirmedProfile
+    ? resolutionForConfirmedProfile(options.confirmedProfile, timestamp)
+    : await resolveProductQuery(options.query, { now });
   const identity = await discoverProviderIdentity({
     profile: resolution.profile,
     provider: "dataforseo_trends",

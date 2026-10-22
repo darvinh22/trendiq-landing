@@ -129,12 +129,16 @@ export type ProviderFailureCategory =
   | "provider_network_error";
 
 export class ProviderExecutionError extends Error {
+  readonly requestDispatched: boolean;
+
   constructor(
     message: string,
-    readonly failureCategory: ProviderFailureCategory
+    readonly failureCategory: ProviderFailureCategory,
+    requestDispatched = false
   ) {
     super(message);
     this.name = "ProviderExecutionError";
+    this.requestDispatched = requestDispatched;
   }
 }
 

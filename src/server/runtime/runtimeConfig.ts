@@ -19,6 +19,8 @@ export interface PrivateAlphaRuntimeConfig {
   analysisEnabled: boolean;
   dataForSeoApiBaseUrl: string;
   jobDeadlineMs: number | null;
+  openAnalysisDataDir: string;
+  openAnalysisEnabled: boolean;
   paidOperationCeiling: number | null;
   reviewsLive: boolean;
   searchLive: boolean;
@@ -64,6 +66,9 @@ export function readPrivateAlphaRuntimeConfig(
   const searchLive = searchMode === "live";
   const reviewsLive = reviewsMode === "live";
   const analysisEnabled = env.TRENDIQ_ANALYSIS_ENABLED === "true";
+  const openAnalysisEnabled = env.TRENDIQ_OPEN_ANALYSIS_ENABLED === "true";
+  // No cwd/.trendiq fallback. An unset or blank directory fails closed in the spend store.
+  const openAnalysisDataDir = env.TRENDIQ_DATA_DIR?.trim() ?? "";
   const paidOperationCeiling = parsePositiveInteger(env.TRENDIQ_PROCESS_MAX_PAID_OPERATIONS);
   const configuredDeadline = env.TRENDIQ_ANALYSIS_JOB_DEADLINE_MS;
   const jobDeadlineMs = configuredDeadline === undefined
@@ -98,6 +103,8 @@ export function readPrivateAlphaRuntimeConfig(
     analysisEnabled,
     dataForSeoApiBaseUrl: approvedBaseUrl ?? APPROVED_DATAFORSEO_ORIGIN,
     jobDeadlineMs,
+    openAnalysisDataDir,
+    openAnalysisEnabled,
     paidOperationCeiling,
     reviewsLive,
     searchLive,
