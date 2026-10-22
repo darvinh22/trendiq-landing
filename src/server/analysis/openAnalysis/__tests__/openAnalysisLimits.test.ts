@@ -13,8 +13,8 @@ import {
   createAnalysisSpendTracker,
   type AnalysisSpendLedger,
 } from "../costAccounting";
-import { OpenAnalysisFileStore, STORE_FILE_NAME, provisionOpenAnalysisStore } from "../fileStore";
-import { OpenAnalysisService } from "../openAnalysisService";
+import { LOCK_STALE_MS, OpenAnalysisFileStore, STORE_FILE_NAME, provisionOpenAnalysisStore } from "../fileStore";
+import { FileSpendLedger, OpenAnalysisService } from "../openAnalysisService";
 import { isProhibitedQuery, queryHash, readShoppingCandidates, sanitizeProductQuery } from "../productResolver";
 import { searchShoppingIdentity } from "../shoppingIdentitySearch";
 
@@ -124,6 +124,8 @@ describe("open analysis spend caps", () => {
     await expect(wrapped(ads, { method: "POST" })).rejects.toThrow("socket_reset");
     expect(failing.micros).toBe(90_000);
     expect(errorTracker.exceeded).toBe(true);
+    const blocked = await failing.reserve(2_000, new Date("2026-10-22T00:00:00.000Z"), { cycleId: "cycle_next" });
+    expect(blocked).toEqual({ ok: false, micros: 0, reason: "unknown_cost" });
   });
 
   it("blocks a resolve when the daily file counter is already $3", async () => {
@@ -182,11 +184,18 @@ describe("open analysis spend caps", () => {
     const restarted = new OpenAnalysisFileStore(dataDir);
     const document = await restarted.read();
     expect(document.spendByDay["2026-10-21"]?.micros).toBe(2_000);
+    const held = Object.values(document.spendByDay["2026-10-21"]?.reservations ?? {});
+    expect(held).toHaveLength(1);
+    expect(held[0]?.costState).toBe("unknown");
+    const nextDay = await new FileSpendLedger(restarted).reserve(2_000, new Date("2026-10-22T01:00:00.000Z"), {
+      cycleId: "cycle_after_restart",
+    });
+    expect(nextDay).toEqual({ ok: false, micros: 0, reason: "unknown_cost" });
   });
 });
 
 describe("open analysis file store", () => {
-  it("does not lose parallel increments and steals a dead lock", async () => {
+  it("does not lose parallel increments and does not steal a fresh dead lock", async () => {
     const dataDir = await readyDir();
     const first = new OpenAnalysisFileStore(dataDir);
     const second = new OpenAnalysisFileStore(dataDir);
@@ -200,7 +209,27 @@ describe("open analysis file store", () => {
     expect(after.resolveCountByDay["2026-10-21"]).toBe(20);
 
     const lockPath = join(dataDir, `${STORE_FILE_NAME}.lock`);
-    await writeFile(lockPath, JSON.stringify({ pid: 2_147_483_646, createdAt: new Date().toISOString() }));
+    const freshDead = JSON.stringify({
+      pid: 2_147_483_646,
+      createdAt: new Date().toISOString(),
+      token: "fresh-dead",
+    });
+    await writeFile(lockPath, freshDead);
+    const waiting = new OpenAnalysisFileStore(dataDir, { lockWaitMs: 80 });
+    await expect(waiting.update((document) => {
+      document.resolveCountByDay["2026-10-21"] = (document.resolveCountByDay["2026-10-21"] ?? 0) + 1;
+    })).rejects.toThrow("open_analysis_store_lock_timeout");
+    expect(await readFile(lockPath, "utf8")).toBe(freshDead);
+    const whileHeld = JSON.parse(await readFile(join(dataDir, STORE_FILE_NAME), "utf8")) as {
+      resolveCountByDay?: Record<string, number>;
+    };
+    expect(whileHeld.resolveCountByDay?.["2026-10-21"]).toBe(20);
+
+    await writeFile(lockPath, JSON.stringify({
+      pid: 2_147_483_646,
+      createdAt: new Date(Date.now() - LOCK_STALE_MS - 1_000).toISOString(),
+      token: "stale-dead",
+    }));
     await second.update((document) => {
       document.resolveCountByDay["2026-10-21"] = (document.resolveCountByDay["2026-10-21"] ?? 0) + 1;
     });
@@ -519,6 +548,8 @@ describe("query identity and shopping polls", () => {
     const document = await new OpenAnalysisFileStore(dataDir, { now: () => now }).read();
     expect(document.spendByDay["2026-10-21"]?.micros).toBe(2_000);
     expect(document.spendByDay["2026-10-22"]?.micros ?? 0).toBe(0);
+    const held = Object.values(document.spendByDay["2026-10-21"]?.reservations ?? {});
+    expect(held[0]?.costState).toBe("unknown");
   });
 
   it("lets only one of two concurrent resolves reserve the last daily dollar", async () => {

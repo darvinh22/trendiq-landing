@@ -102,6 +102,11 @@ export interface ReconciliationProof {
   source: "provider_response";
   /** Finite provider `cost` in USD. Must convert to `actualMicros`. */
   providerCostUsd: number;
+  /**
+   * Operator evidence for that cost, such as `task:<id> date:YYYY-MM-DD`.
+   * Non-empty, no newlines, at most 512 characters. Not a substitute for the cost.
+   */
+  evidenceRef: string;
 }
 
 export interface SpendReserveContext {
@@ -118,7 +123,7 @@ export interface AnalysisSpendLedger {
   reconcile(id: string, actualMicros: number, now: Date): Promise<void>;
   /**
    * A paid request was sent and the cost did not come back. Keeps the hold and
-   * blocks the reservation's UTC day and cycle. Does not book the estimate.
+   * blocks every UTC day and every cycle. Does not book the estimate.
    */
   markUnknown(id: string, now: Date): Promise<void>;
   /**
@@ -177,6 +182,12 @@ export function createAnalysisSpendTracker(options: {
         }
         try {
           const response = await replayResponse(await fetchImpl(url, init));
+          if (estimate > 0 && paidResultIsUnknown(response)) {
+            await options.ledger.markUnknown(reservation.id, reservedAt);
+            spentMicros += estimate;
+            exceeded = true;
+            return response;
+          }
           const actual = response.costMicros === null ? estimate : response.costMicros;
           await options.ledger.reconcile(reservation.id, actual, options.now());
           spentMicros += actual;
@@ -184,7 +195,7 @@ export function createAnalysisSpendTracker(options: {
           return response;
         } catch (error) {
           const message = error instanceof Error ? error.message : "";
-          if (isInFlightPaidTimeout(error) && estimate > 0) {
+          if (estimate > 0 && isPostSendUnknown(error)) {
             await options.ledger.markUnknown(reservation.id, reservedAt);
             spentMicros += estimate;
             exceeded = true;
@@ -252,9 +263,38 @@ async function replayResponse(response: {
   };
 }
 
-function isInFlightPaidTimeout(error: unknown): boolean {
-  if (error instanceof ProviderExecutionError) return error.failureCategory === "provider_timeout";
-  return error instanceof Error && error.message === "controlled_provider_request_timeout";
+const PRE_SEND_REFUSAL = new Set([
+  "controlled_spend_cap_exceeded",
+  "controlled_daily_spend_cap_exceeded",
+  "controlled_unknown_cost_blocked",
+  "process_paid_operation_ceiling_exhausted",
+  "controlled_analysis_deadline_exceeded",
+  "controlled_http_budget_exhausted",
+  "controlled_paid_operation_budget_exhausted",
+  "controlled_task_post_budget_exhausted",
+  "unsafe_provider_post_retry_blocked",
+]);
+
+/**
+ * True when the POST was already handed to the provider and the outcome does
+ * not prove there was no billable consumption. Pre-send refusals stay false.
+ */
+function isPostSendUnknown(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : "";
+  if (PRE_SEND_REFUSAL.has(message)) return false;
+  if (error instanceof ProviderExecutionError) {
+    if (error.requestDispatched) return true;
+    return error.failureCategory === "provider_timeout" || error.failureCategory === "provider_network_error";
+  }
+  if (message === "controlled_provider_request_timeout") return true;
+  return /ECONNRESET|ECONNABORTED|EPIPE|ETIMEDOUT|socket hang up|socket_reset|ECONNREFUSED|aborted|interrupted/i.test(message);
+}
+
+/** A paid POST response is unknown unless a finite cost, including zero, is explicit on a non-error status. */
+function paidResultIsUnknown(response: ReplayResponse): boolean {
+  if (response.costMicros === 0) return false;
+  if (response.status >= 400) return true;
+  return response.costMicros === null;
 }
 
 export function assertReconciliationProof(actualMicros: number, proof: ReconciliationProof | undefined): void {
@@ -262,7 +302,14 @@ export function assertReconciliationProof(actualMicros: number, proof: Reconcili
   if (typeof proof.providerCostUsd !== "number" || !Number.isFinite(proof.providerCostUsd) || proof.providerCostUsd < 0) {
     throw new Error("open_analysis_reconciliation_unverified");
   }
+  if (!isEvidenceRef(proof.evidenceRef)) throw new Error("open_analysis_reconciliation_unverified");
   if (usdToMicros(proof.providerCostUsd) !== actualMicros) throw new Error("open_analysis_reconciliation_unverified");
+}
+
+function isEvidenceRef(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  return trimmed.length > 0 && trimmed.length <= 512 && trimmed === value && !/[\r\n]/.test(value);
 }
 
 /**
@@ -273,13 +320,15 @@ export async function reconcileUnknownFromProviderBody(
   ledger: AnalysisSpendLedger,
   id: string,
   body: unknown,
-  now: Date
+  now: Date,
+  evidenceRef: string
 ): Promise<boolean> {
   const micros = readResponseCostMicros(body);
   if (micros === null) return false;
   await ledger.reconcileVerified(id, micros, now, {
     source: "provider_response",
     providerCostUsd: micros / USD_MICROS,
+    evidenceRef,
   });
   return true;
 }
@@ -352,8 +401,8 @@ export function estimateOpenAnalysisSpend(): OpenAnalysisSpendEstimate {
     notes: [
       "Estimate from the code paths in productionEvidenceCollector and the resolve shopping search, priced from public DataForSEO list pages. Not a bill.",
       "Task GET polls reserve $0 and then add the response cost field when present.",
-      "Errors and thrown calls reserve the list-price estimate so retries and failures still count.",
-      "A timeout after a paid request was sent is not booked at the estimate. The hold stays unknown and blocks that UTC day and cycle until an explicit reconciliation with the provider cost.",
+      "A refusal before the request is sent still reserves the list-price estimate so a retry cannot spend the cap twice.",
+      "After the POST is sent, a timeout, connection reset, HTTP 5xx, or any result that does not prove zero consumption stays an unknown hold. That hold blocks every UTC day and every cycle until an explicit reconciliation. It is not deleted.",
       "A call is not started unless the published list price still fits in both the resolution+analysis cycle ($0.15) and the UTC day the reservation is made ($3).",
       "Resolve and analysis share one cycle ledger. There is no separate $0.002 allowance on top of $0.15.",
       "Returned provider cost can exceed the published list price. That overage is recorded on the reservation's original UTC day and can put the cycle or the day above the limit. This is not a hard invoice cap. See docs/OPEN_ANALYSIS.md.",

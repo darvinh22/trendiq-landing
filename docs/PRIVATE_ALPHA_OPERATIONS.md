@@ -8,12 +8,16 @@ alpha. It does not describe a public or multi-replica deployment.
 - Run exactly one Node process and exactly one deployment replica. This is a
   hard requirement for open-analysis spend, not only for the Ray-Ban Meta job
   map. The spend ledger is one JSON file guarded by a local lock file. The lock
-  is not shared across hosts. Stale-lock takeover removes a lock older than 60
-  seconds, a lock whose pid is not alive on this machine, or a lock file that
-  cannot be parsed. A second replica can pass that lock and spend again. Do not
-  add a second process, a second container, or a second host against the same
-  `TRENDIQ_DATA_DIR`. Disable auto-scaling and rolling overlap so two
-  application processes are never active at the same time.
+  is not shared across hosts or NFS. Creation is a temp file plus `link`. A
+  fresh lock stays held when its pid is dead, including across a restart or a
+  deploy overlap. An unreadable lock stays held. Takeover of a lock older than
+  60 seconds re-checks pid, `createdAt`, and token before removing it, and
+  release removes only the lock this process owns. A second replica can still
+  spend again. Do not add a second process, a second container, or a second
+  host against the same `TRENDIQ_DATA_DIR`. Disable auto-scaling and rolling
+  overlap so two application processes are never active at the same time.
+  After 60 seconds a lock whose owner is still alive can be taken; that window
+  is why overlap must stay disabled.
 - Build with `npm run build` and start with `npm start`. Vite preview is not the
   production server.
 - `PORT` defaults to 3000. Leave `HOST` unset to listen on all interfaces, which
@@ -119,16 +123,30 @@ After the directory exists, provision the ledger once. This is the only step
 that may create a zeroed spend file:
 
 ```text
-TRENDIQ_DATA_DIR=/var/lib/trendiq node --experimental-transform-types scripts/provision-open-analysis-store.mjs
+TRENDIQ_DATA_DIR=/var/lib/trendiq node scripts/provision-open-analysis-store.mjs
 ```
 
-Restart and recovery only open that file. They do not provision it again. If
-the configured directory is missing, the ledger file is missing after it was
-provisioned, or the JSON is corrupt, open analysis refuses paid calls and does
-not write a replacement with counters at zero. A timeout after a paid request
-was sent records an unknown cost and blocks new paid calls for that UTC day and
-cycle until the provider `cost` is reconciled explicitly. A late response does
-not clear that hold by itself.
+The process requires Node `>=22.7.0 <23` (`.nvmrc` is `22.23.4`). Restart and
+recovery only open that file. They do not provision it again. If the configured
+directory is missing, the ledger file is missing after it was provisioned, or
+the JSON is corrupt, open analysis refuses paid calls and does not write a
+replacement with counters at zero. After a paid POST, a timeout, connection
+reset, HTTP 5xx, or any result that does not prove zero consumption records an
+unknown cost. That hold blocks new paid calls on every UTC day and every cycle
+until it is reconciled. A restart does not clear it. A late response does not
+clear it by itself.
+
+Read the actual cost from DataForSEO billing or API usage for that UTC day.
+Match the task by time, endpoint, and task id. Use that row's USD cost, not
+the published list price. Then:
+
+```text
+TRENDIQ_DATA_DIR=/var/lib/trendiq node scripts/reconcile-open-analysis.mjs <holdId> <providerCostUsd> "task:<id> date:YYYY-MM-DD"
+```
+
+The script does not call DataForSEO. It keeps the reservation, marks it
+reconciled, and appends one line to `open-analysis-audit.log`. Do not hand-edit
+`open-analysis.json`. See `docs/OPEN_ANALYSIS.md`.
 
 Leave `TRENDIQ_OPEN_ANALYSIS_ENABLED` false until the directory exists, the
 ledger has been provisioned, and the single-replica limit above is in place.

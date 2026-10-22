@@ -5,7 +5,7 @@
 
   ## Running the code
 
-  Run `npm i` to install the dependencies.
+  Node `22.23.4` (`.nvmrc`, engines `>=22.7.0 <23`). Install with `pnpm install --frozen-lockfile`.
 
   Run `npm run dev` to start the development server.
 
@@ -29,8 +29,10 @@
   connected.
 
   Open-analysis spend state is safe only on a single Node process and a single
-  replica. The file lock, including stale-lock takeover, is not a distributed
-  lock. Do not run a second process against the same `TRENDIQ_DATA_DIR`.
+  replica. The file lock is not a distributed lock. A fresh or unreadable lock
+  is held, including when the owner pid is already dead. Stale takeover
+  re-checks pid, creation time, and token. Do not run a second process against
+  the same `TRENDIQ_DATA_DIR`.
   `TRENDIQ_DATA_DIR` does not fall back to `.trendiq` in the working directory.
   An operator provisions the ledger once; restart does not create a new zeroed
   ledger. See `docs/PRIVATE_ALPHA_OPERATIONS.md`.

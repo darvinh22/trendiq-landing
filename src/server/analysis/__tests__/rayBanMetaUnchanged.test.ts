@@ -31,7 +31,7 @@ function readyEnv(dataDir: string, open: boolean) {
   };
 }
 
-describe("ray-ban-meta flow with open analysis present", () => {
+describe("rayBanMetaUnchanged: ray-ban-meta flow with open analysis present", () => {
   it.each([false, true])("keeps the catalog and productId contract when open analysis is %s", async (open) => {
     const dataDir = await mkdtemp(join(tmpdir(), "trendiq-rayban-"));
     dirs.push(dataDir);

@@ -7,9 +7,9 @@
  * A missing directory is not created. A missing or corrupt ledger that was
  * already initialized is not replaced. No provider is contacted.
  *
- *   node --experimental-transform-types scripts/provision-open-analysis-store.mjs
+ *   node scripts/provision-open-analysis-store.mjs
  */
-import { provisionOpenAnalysisStore } from "../src/server/analysis/openAnalysis/fileStore.ts";
+import { provisionStore } from "../src/server/analysis/openAnalysis/storeFile.mjs";
 
 const directory = process.env.TRENDIQ_DATA_DIR?.trim() ?? "";
 if (!directory) {
@@ -18,7 +18,7 @@ if (!directory) {
 }
 
 try {
-  const result = await provisionOpenAnalysisStore(directory);
+  const result = await provisionStore(directory);
   if (result === "created") {
     console.log("provisioned empty spend ledger");
   } else {

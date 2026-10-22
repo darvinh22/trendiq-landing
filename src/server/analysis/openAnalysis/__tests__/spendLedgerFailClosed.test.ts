@@ -14,12 +14,15 @@ import {
   reconcileUnknownFromProviderBody,
 } from "../costAccounting";
 import {
+  AUDIT_LOG_NAME,
   LOCK_STALE_MS,
   OpenAnalysisFileStore,
   PROVISION_MARKER_NAME,
   STORE_FILE_NAME,
   provisionOpenAnalysisStore,
+  releaseStoreLock,
 } from "../fileStore";
+import { commitStaleSteal } from "../storeFile.mjs";
 import { FileSpendLedger, OpenAnalysisService } from "../openAnalysisService";
 
 const tempDirs: string[] = [];
@@ -42,9 +45,9 @@ async function readyDir(): Promise<string> {
   return dir;
 }
 
-function jsonResponse(body: unknown) {
+function jsonResponse(body: unknown, status = 200) {
   const text = JSON.stringify(body);
-  return { ok: true, status: 200, json: async () => body, text: async () => text };
+  return { ok: status >= 200 && status < 300, status, json: async () => body, text: async () => text };
 }
 
 function dayReservations(document: Awaited<ReturnType<OpenAnalysisFileStore["read"]>>, day: string) {
@@ -232,21 +235,30 @@ describe("unknown cost after a paid timeout", () => {
     const blocked = await ledger.reserve(2_000, now, { cycleId: "cycle_other" });
     expect(blocked).toEqual({ ok: false, micros: 0, reason: "unknown_cost" });
     const nextDay = await ledger.reserve(2_000, new Date("2026-10-22T00:10:00.000Z"), { cycleId: "cycle_next_day" });
-    expect(nextDay.ok).toBe(true);
+    expect(nextDay).toEqual({ ok: false, micros: 0, reason: "unknown_cost" });
+    const laterCycle = await ledger.reserve(2_000, new Date("2026-11-02T00:10:00.000Z"), { cycleId: "cycle_weeks_later" });
+    expect(laterCycle).toEqual({ ok: false, micros: 0, reason: "unknown_cost" });
     const restarted = new FileSpendLedger(new OpenAnalysisFileStore(dataDir));
     const stillBlocked = await restarted.reserve(2_000, now, { cycleId: "cycle_restart" });
     expect(stillBlocked).toEqual({ ok: false, micros: 0, reason: "unknown_cost" });
 
     releaseLate({ tasks: [{ id: "task_late_no_cost", status_code: 20000 }] });
     await late;
-    expect(await reconcileUnknownFromProviderBody(ledger, id, { tasks: [{ id: "task_late_no_cost" }] }, now)).toBe(false);
+    expect(await reconcileUnknownFromProviderBody(ledger, id, { tasks: [{ id: "task_late_no_cost" }] }, now, "task:task_late_no_cost date:2026-10-21")).toBe(false);
     expect((await new OpenAnalysisFileStore(dataDir).read()).spendByDay["2026-10-21"]?.reservations[id]?.costState).toBe("unknown");
 
     const lateBody = { cost: 0.05, tasks: [{ id: "task_late_1", cost: 0.05 }] };
+    const evidenceRef = "task:task_late_1 date:2026-10-21";
     releaseLate(lateBody);
-    expect(await reconcileUnknownFromProviderBody(ledger, id, lateBody, now)).toBe(true);
+    expect(await reconcileUnknownFromProviderBody(ledger, id, lateBody, now, evidenceRef)).toBe(true);
     const settled = await new OpenAnalysisFileStore(dataDir, { now: () => now }).read();
-    expect(settled.spendByDay["2026-10-21"]?.reservations[id]).toBeUndefined();
+    expect(settled.spendByDay["2026-10-21"]?.reservations[id]).toMatchObject({
+      costState: "reconciled",
+      heldMicros: 2_000,
+      actualMicros: 50_000,
+      micros: 50_000,
+      evidenceRef,
+    });
     expect(settled.spendByDay["2026-10-21"]?.micros).toBe(50_000);
     expect(settled.spendByDay["2026-10-21"]?.micros).not.toBe(2_000);
     const resumed = await ledger.reserve(2_000, now, { cycleId: "cycle_after" });
@@ -315,9 +327,14 @@ describe("unknown cost after a paid timeout", () => {
     expect(blockedFetch).not.toHaveBeenCalled();
 
     const ledger = new FileSpendLedger(new OpenAnalysisFileStore(dataDir, { now: () => now }));
-    expect(await reconcileUnknownFromProviderBody(ledger, reservationId, lateBody, now)).toBe(true);
+    const evidenceRef = "task:task_late_service date:2026-10-21";
+    expect(await reconcileUnknownFromProviderBody(ledger, reservationId, lateBody, now, evidenceRef)).toBe(true);
     const settled = await new OpenAnalysisFileStore(dataDir, { now: () => now }).read();
-    expect(settled.spendByDay["2026-10-21"]?.reservations[reservationId]).toBeUndefined();
+    expect(settled.spendByDay["2026-10-21"]?.reservations[reservationId]).toMatchObject({
+      costState: "reconciled",
+      actualMicros: 10_000,
+      evidenceRef,
+    });
     expect(settled.spendByDay["2026-10-21"]?.micros).toBe(10_000);
   });
 
@@ -358,25 +375,27 @@ describe("open analysis file lock", () => {
     await expect(stat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("takes over an unreadable lock and a lock with an unparseable timestamp", async () => {
+  it("treats an unreadable lock and an unparseable timestamp as held", async () => {
     const corruptDir = await readyDir();
     const corruptLock = join(corruptDir, `${STORE_FILE_NAME}.lock`);
-    await writeFile(corruptLock, "{not-json");
-    const corruptStore = new OpenAnalysisFileStore(corruptDir);
-    await corruptStore.update((document) => {
+    const corruptBytes = "{not-json";
+    await writeFile(corruptLock, corruptBytes);
+    const corruptStore = new OpenAnalysisFileStore(corruptDir, { lockWaitMs: 80 });
+    await expect(corruptStore.update((document) => {
       document.resolveCountByDay["2026-10-21"] = 1;
-    });
-    expect((await corruptStore.read()).resolveCountByDay["2026-10-21"]).toBe(1);
+    })).rejects.toThrow("open_analysis_store_lock_timeout");
+    expect(await readFile(corruptLock, "utf8")).toBe(corruptBytes);
+    expect((await readdir(corruptDir)).includes(`${STORE_FILE_NAME}.lock`)).toBe(true);
 
     const staleStampDir = await readyDir();
     const staleLock = join(staleStampDir, `${STORE_FILE_NAME}.lock`);
-    await writeFile(staleLock, JSON.stringify({ pid: process.pid, createdAt: "not-a-date" }));
-    const staleStore = new OpenAnalysisFileStore(staleStampDir);
-    await staleStore.update((document) => {
+    const staleBytes = JSON.stringify({ pid: process.pid, createdAt: "not-a-date", token: "held" });
+    await writeFile(staleLock, staleBytes);
+    const staleStore = new OpenAnalysisFileStore(staleStampDir, { lockWaitMs: 80 });
+    await expect(staleStore.update((document) => {
       document.resolveCountByDay["2026-10-21"] = 2;
-    });
-    expect((await staleStore.read()).resolveCountByDay["2026-10-21"]).toBe(2);
-    await expect(stat(staleLock)).rejects.toMatchObject({ code: "ENOENT" });
+    })).rejects.toThrow("open_analysis_store_lock_timeout");
+    expect(await readFile(staleLock, "utf8")).toBe(staleBytes);
   });
 
   it("does not take over a fresh lock held by a live pid", async () => {
@@ -403,7 +422,7 @@ describe("explicit spend-ledger provisioning script", () => {
       cwdExisted = (error as NodeJS.ErrnoException).code !== "ENOENT";
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
-    const unset = spawnSync(process.execPath, ["--experimental-transform-types", "scripts/provision-open-analysis-store.mjs"], {
+    const unset = spawnSync(process.execPath, ["scripts/provision-open-analysis-store.mjs"], {
       cwd: process.cwd(),
       encoding: "utf8",
       env: { ...process.env, TRENDIQ_DATA_DIR: "" },
@@ -413,7 +432,7 @@ describe("explicit spend-ledger provisioning script", () => {
     if (!cwdExisted) await expect(stat(cwdLedger)).rejects.toMatchObject({ code: "ENOENT" });
 
     const missing = join(tmpdir(), `trendiq-script-missing-${process.pid}-${Date.now()}`);
-    const missingRun = spawnSync(process.execPath, ["--experimental-transform-types", "scripts/provision-open-analysis-store.mjs"], {
+    const missingRun = spawnSync(process.execPath, ["scripts/provision-open-analysis-store.mjs"], {
       cwd: process.cwd(),
       encoding: "utf8",
       env: { ...process.env, TRENDIQ_DATA_DIR: missing },
@@ -423,7 +442,7 @@ describe("explicit spend-ledger provisioning script", () => {
     await expect(stat(missing)).rejects.toMatchObject({ code: "ENOENT" });
 
     const dataDir = await tempDir();
-    const created = spawnSync(process.execPath, ["--experimental-transform-types", "scripts/provision-open-analysis-store.mjs"], {
+    const created = spawnSync(process.execPath, ["scripts/provision-open-analysis-store.mjs"], {
       cwd: process.cwd(),
       encoding: "utf8",
       env: { ...process.env, TRENDIQ_DATA_DIR: dataDir },
@@ -439,7 +458,7 @@ describe("explicit spend-ledger provisioning script", () => {
         paidOperationCount: 1,
       };
     });
-    const again = spawnSync(process.execPath, ["--experimental-transform-types", "scripts/provision-open-analysis-store.mjs"], {
+    const again = spawnSync(process.execPath, ["scripts/provision-open-analysis-store.mjs"], {
       cwd: process.cwd(),
       encoding: "utf8",
       env: { ...process.env, TRENDIQ_DATA_DIR: dataDir },
@@ -447,6 +466,208 @@ describe("explicit spend-ledger provisioning script", () => {
     expect(again.status).toBe(0);
     expect(again.stdout).toMatch(/counters unchanged/);
     expect((await store.read()).spendByDay["2026-10-21"]?.micros).toBe(80_000);
+  });
+});
+
+describe("post-send cost classification", () => {
+  async function settle(fetchImpl: FetchLike, cycleId: string): Promise<string> {
+    const dataDir = await readyDir();
+    const now = new Date("2026-10-21T12:00:00.000Z");
+    const ledger = new FileSpendLedger(new OpenAnalysisFileStore(dataDir, { now: () => now }));
+    const wrapped = createAnalysisSpendTracker({
+      maxMicros: 150_000,
+      ledger,
+      now: () => now,
+      cycleId,
+    }).wrap(fetchImpl);
+    await wrapped(paidUrl, { method: "POST" }).catch((error: unknown) => {
+      if (error instanceof Error && error.message === "controlled_provider_network_error") return;
+      if (error instanceof Error && error.message === "controlled_analysis_deadline_exceeded") return;
+      throw error;
+    });
+    return dataDir;
+  }
+
+  it("holds a dispatched reset, a 5xx, and a missing cost as unknown", async () => {
+    const now = new Date("2026-10-21T12:00:00.000Z");
+    const resetDir = await settle(async () => {
+      throw new ProviderExecutionError("controlled_provider_network_error", "provider_network_error", true);
+    }, "cycle_reset");
+    const serverDir = await settle(async () => jsonResponse({ cost: 0.04, tasks: [{ cost: 0.04 }] }, 500), "cycle_5xx");
+    const ambiguousDir = await settle(async () => jsonResponse({ tasks: [{ id: "task_no_cost" }] }), "cycle_ambiguous");
+    for (const dataDir of [resetDir, serverDir, ambiguousDir]) {
+      const document = await new OpenAnalysisFileStore(dataDir, { now: () => now }).read();
+      const reservations = Object.values(dayReservations(document, "2026-10-21"));
+      expect(reservations).toHaveLength(1);
+      expect(reservations[0]?.costState).toBe("unknown");
+      expect(reservations[0]?.micros).toBe(2_000);
+      expect(document.spendByDay["2026-10-21"]?.micros).toBe(2_000);
+      const blocked = await new FileSpendLedger(new OpenAnalysisFileStore(dataDir)).reserve(
+        2_000,
+        new Date("2026-10-23T00:00:00.000Z"),
+        { cycleId: "cycle_later" }
+      );
+      expect(blocked).toEqual({ ok: false, micros: 0, reason: "unknown_cost" });
+    }
+  });
+
+  it("reconciles a 5xx that proves zero cost and still books a refusal from before the POST", async () => {
+    const now = new Date("2026-10-21T12:00:00.000Z");
+    const zeroDir = await settle(async () => jsonResponse({ cost: 0, tasks: [{ cost: 0 }] }, 500), "cycle_zero");
+    const zeroDoc = await new OpenAnalysisFileStore(zeroDir, { now: () => now }).read();
+    expect(dayReservations(zeroDoc, "2026-10-21")).toEqual({});
+    expect(zeroDoc.spendByDay["2026-10-21"]?.micros ?? 0).toBe(0);
+    const resumed = await new FileSpendLedger(new OpenAnalysisFileStore(zeroDir)).reserve(2_000, now, { cycleId: "cycle_ok" });
+    expect(resumed.ok).toBe(true);
+
+    const preSendDir = await settle(async () => {
+      throw new Error("controlled_analysis_deadline_exceeded");
+    }, "cycle_presend");
+    const preSendDoc = await new OpenAnalysisFileStore(preSendDir, { now: () => now }).read();
+    expect(dayReservations(preSendDoc, "2026-10-21")).toEqual({});
+    expect(preSendDoc.spendByDay["2026-10-21"]?.micros).toBe(2_000);
+    expect(Object.values(preSendDoc.spendByDay).some((day) =>
+      Object.values(day.reservations).some((reservation) => reservation.costState === "unknown")
+    )).toBe(false);
+  });
+
+  it("keeps an old unknown hold through retention pruning and a restart", async () => {
+    const dataDir = await readyDir();
+    const now = new Date("2026-10-21T12:00:00.000Z");
+    const store = new OpenAnalysisFileStore(dataDir, { now: () => now });
+    await store.update((document) => {
+      document.spendByDay["2020-01-01"] = {
+        micros: 2_000,
+        reservations: {
+          holdoldunknown: {
+            micros: 2_000,
+            createdAt: "2020-01-01T00:00:00.000Z",
+            dayKey: "2020-01-01",
+            cycleId: "cycle_old",
+            costState: "unknown",
+          },
+        },
+        analysisCount: 0,
+        paidOperationCount: 1,
+      };
+      document.spendByDay["2020-01-02"] = {
+        micros: 2_000,
+        reservations: {},
+        analysisCount: 0,
+        paidOperationCount: 1,
+      };
+    });
+    const restarted = await new OpenAnalysisFileStore(dataDir, { now: () => now }).read();
+    expect(restarted.spendByDay["2020-01-01"]?.reservations.holdoldunknown?.costState).toBe("unknown");
+    expect(restarted.spendByDay["2020-01-02"]).toBeUndefined();
+    const blocked = await new FileSpendLedger(new OpenAnalysisFileStore(dataDir)).reserve(
+      2_000,
+      now,
+      { cycleId: "cycle_new" }
+    );
+    expect(blocked).toEqual({ ok: false, micros: 0, reason: "unknown_cost" });
+  });
+});
+
+describe("auditable reconciliation script", () => {
+  it("records the provider cost without deleting the hold and does not apply it twice", async () => {
+    const dataDir = await readyDir();
+    const now = new Date("2026-10-21T12:00:00.000Z");
+    const store = new OpenAnalysisFileStore(dataDir, { now: () => now });
+    await store.update((document) => {
+      document.spendByDay["2026-10-21"] = {
+        micros: 2_000,
+        reservations: {
+          holdabc123: {
+            micros: 2_000,
+            createdAt: now.toISOString(),
+            dayKey: "2026-10-21",
+            cycleId: "cycle_script",
+            costState: "unknown",
+          },
+        },
+        analysisCount: 0,
+        paidOperationCount: 1,
+      };
+      document.cycles.cycle_script = { dayKey: "2026-10-21", micros: 2_000 };
+    });
+    const evidenceRef = "task:holdabc123 date:2026-10-21";
+    const args = ["scripts/reconcile-open-analysis.mjs", "holdabc123", "0.05", evidenceRef];
+    const run = spawnSync(process.execPath, args, {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: { ...process.env, TRENDIQ_DATA_DIR: dataDir },
+    });
+    expect(run.status).toBe(0);
+    expect(run.stdout).toMatch(/reconciled unknown hold/);
+    const settled = await store.read();
+    expect(settled.spendByDay["2026-10-21"]?.reservations.holdabc123).toMatchObject({
+      costState: "reconciled",
+      heldMicros: 2_000,
+      actualMicros: 50_000,
+      evidenceRef,
+    });
+    expect(settled.spendByDay["2026-10-21"]?.micros).toBe(50_000);
+    const auditPath = join(dataDir, AUDIT_LOG_NAME);
+    const first = (await readFile(auditPath, "utf8")).trim().split("\n");
+    expect(first).toHaveLength(1);
+    expect(JSON.parse(first[0] ?? "{}")).toMatchObject({
+      action: "reconcile_verified",
+      holdId: "holdabc123",
+      providerCostUsd: 0.05,
+      actualMicros: 50_000,
+      evidenceRef,
+      idempotent: false,
+    });
+
+    const again = spawnSync(process.execPath, args, {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: { ...process.env, TRENDIQ_DATA_DIR: dataDir },
+    });
+    expect(again.status).toBe(0);
+    expect(again.stdout).toMatch(/already reconciled/);
+    expect((await store.read()).spendByDay["2026-10-21"]?.micros).toBe(50_000);
+    const second = (await readFile(auditPath, "utf8")).trim().split("\n");
+    expect(second).toHaveLength(2);
+    expect(JSON.parse(second[1] ?? "{}").idempotent).toBe(true);
+    expect(second[0]).toBe(first[0]);
+
+    const resumed = await new FileSpendLedger(store).reserve(2_000, now, { cycleId: "cycle_after_script" });
+    expect(resumed.ok).toBe(true);
+
+    const missingEvidence = spawnSync(process.execPath, ["scripts/reconcile-open-analysis.mjs", "holdabc123", "0.05"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: { ...process.env, TRENDIQ_DATA_DIR: dataDir },
+    });
+    expect(missingEvidence.status).toBe(1);
+    expect(missingEvidence.stderr).toMatch(/usage:/);
+  });
+});
+
+describe("lock identity", () => {
+  it("restores a fresh lock when a stale steal sees a different identity", async () => {
+    const dataDir = await readyDir();
+    const lockPath = join(dataDir, `${STORE_FILE_NAME}.lock`);
+    const fresh = { pid: process.pid, createdAt: new Date().toISOString(), token: "fresh-token" };
+    await writeFile(lockPath, JSON.stringify(fresh));
+    const stolen = await commitStaleSteal(lockPath, {
+      pid: 1,
+      createdAt: new Date(Date.now() - LOCK_STALE_MS - 5_000).toISOString(),
+      token: "stale-token",
+    });
+    expect(stolen).toBe(false);
+    expect(JSON.parse(await readFile(lockPath, "utf8"))).toEqual(fresh);
+  });
+
+  it("does not release a lock it does not own", async () => {
+    const dataDir = await readyDir();
+    const lockPath = join(dataDir, `${STORE_FILE_NAME}.lock`);
+    const owned = { pid: process.pid, createdAt: new Date().toISOString(), token: "owner-token" };
+    await writeFile(lockPath, JSON.stringify(owned));
+    await releaseStoreLock({ path: lockPath, token: "other-token", pid: process.pid });
+    expect(JSON.parse(await readFile(lockPath, "utf8"))).toEqual(owned);
   });
 });
 

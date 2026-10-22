@@ -110,6 +110,7 @@ describe("ProviderRequestBudget", () => {
       .rejects.toMatchObject({
         message: "controlled_provider_request_timeout",
         failureCategory: "provider_timeout",
+        requestDispatched: true,
       });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
@@ -124,6 +125,7 @@ describe("ProviderRequestBudget", () => {
       .rejects.toMatchObject({
         message: "controlled_provider_network_error",
         failureCategory: "provider_network_error",
+        requestDispatched: true,
       });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });

@@ -81,13 +81,17 @@ export class ProviderRequestBudget {
         new Promise<never>((_resolve, reject) => {
           timeoutId = setTimeout(() => reject(new ProviderExecutionError(
             "controlled_provider_request_timeout",
-            "provider_timeout"
+            "provider_timeout",
+            true
           )), this.requestTimeoutMs);
         }),
       ]);
     } catch (error) {
-      if (error instanceof ProviderExecutionError) throw error;
-      throw new ProviderExecutionError("controlled_provider_network_error", "provider_network_error");
+      if (error instanceof ProviderExecutionError && error.requestDispatched) throw error;
+      if (error instanceof ProviderExecutionError) {
+        throw new ProviderExecutionError(error.message, error.failureCategory, true);
+      }
+      throw new ProviderExecutionError("controlled_provider_network_error", "provider_network_error", true);
     } finally {
       if (timeoutId) clearTimeout(timeoutId);
     }

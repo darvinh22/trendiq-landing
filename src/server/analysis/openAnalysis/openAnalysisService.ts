@@ -30,6 +30,7 @@ import {
   type SpendReservationRecord,
   type StoreDocument,
 } from "./fileStore";
+import { reconcileVerifiedHold } from "./storeFile.mjs";
 import {
   abstainMessage,
   ANALYSIS_RESULT_TTL_MS,
@@ -207,7 +208,7 @@ export class OpenAnalysisService {
         if (!this.canCallProvider()) return unavailable("runtime_not_ready");
         const gate = await this.store.update((document) => {
           const key = dayKey(this.now());
-          if (hasUnresolvedUnknownCost(document, key)) return "unknown" as const;
+          if (hasUnresolvedUnknownCost(document)) return "unknown" as const;
           const remaining = OPEN_ANALYSIS_DAILY_MAX_MICROS - (document.spendByDay[key]?.micros ?? 0);
           if (remaining < PUBLISHED_PRICE_MICROS.shoppingProductsTaskPost) return "daily" as const;
           return "ok" as const;
@@ -456,7 +457,7 @@ export class FileSpendLedger implements AnalysisSpendLedger {
       if (!document.cycles) document.cycles = {};
       if (!context?.cycleId) return { ok: false, micros: 0, reason: "cycle" };
       const key = dayKey(now);
-      if (hasUnresolvedUnknownCost(document, key, context.cycleId)) {
+      if (hasUnresolvedUnknownCost(document)) {
         return { ok: false, micros: 0, reason: "unknown_cost" };
       }
       const day = daySpend(document, key);
@@ -498,16 +499,16 @@ export class FileSpendLedger implements AnalysisSpendLedger {
   async reconcileVerified(
     id: string,
     actualMicros: number,
-    _responseAt: Date,
+    responseAt: Date,
     proof: ReconciliationProof
   ): Promise<void> {
     assertReconciliationProof(actualMicros, proof);
-    await this.store.update((document) => {
-      const found = findReservation(document, id);
-      if (!found || found.reservation.costState !== "unknown") {
-        throw new Error("open_analysis_reconciliation_unverified");
-      }
-      applyReservationCost(document, id, found, actualMicros);
+    await reconcileVerifiedHold(this.store.directoryPath, {
+      holdId: id,
+      providerCostUsd: proof.providerCostUsd,
+      evidenceRef: proof.evidenceRef,
+      now: responseAt,
+      lockWaitMs: this.store.lockWaitMs,
     });
   }
 }
@@ -529,15 +530,11 @@ function applyReservationCost(
   delete found.day.reservations[id];
 }
 
-function hasUnresolvedUnknownCost(document: StoreDocument, day: string, cycleId?: string): boolean {
-  const todays = document.spendByDay[day];
-  if (todays && Object.values(todays.reservations).some((reservation) => reservation.costState === "unknown")) {
-    return true;
-  }
-  if (!cycleId) return false;
+/** Any unknown hold blocks every UTC day and every cycle until it is reconciled. */
+function hasUnresolvedUnknownCost(document: StoreDocument): boolean {
   for (const spend of Object.values(document.spendByDay)) {
     for (const reservation of Object.values(spend.reservations)) {
-      if (reservation.cycleId === cycleId && reservation.costState === "unknown") return true;
+      if (reservation.costState === "unknown") return true;
     }
   }
   return false;
@@ -583,7 +580,7 @@ function prepareAnalysis(
   window.dayAnalyses += 1;
   const cycleId = resolution.cycleId || `cycle_${input.resolutionId}`;
   const key = dayKey(now);
-  if (hasUnresolvedUnknownCost(document, key, cycleId)) {
+  if (hasUnresolvedUnknownCost(document)) {
     window.hourAnalyses -= 1;
     window.dayAnalyses -= 1;
     return { kind: "response", response: { status: "unavailable", reason: "daily_capacity_reached" } };

@@ -28,10 +28,14 @@ cycle ledger. There is no separate identity allowance on top of the cycle limit.
 - 100 name resolutions per UTC day, 5 analyses per client per hour, 20 per
   client per day, and one analysis in flight per client.
 - This deployment is one Node process and one replica. The file lock is the
-  concurrency control. It is not safe on two replicas or two hosts. Stale-lock
-  takeover (60 seconds, or a dead pid, or an unreadable lock file) assumes the
-  owner is a process on this same machine. A second replica can spend at the
-  same time. Do not scale this service out.
+  concurrency control. It is not safe on two replicas, two hosts, or NFS.
+  Lock creation is a temp file plus `link`, which fails if the lock already
+  exists. A fresh lock is held even when its pid is dead, so a restart or a
+  deploy overlap does not clear it. An unreadable lock is held. A lock older
+  than 60 seconds is removed only after a second check that its pid,
+  `createdAt`, and token are still the stale identity. Release removes a lock
+  only when that same pid and token still own it. A second replica can still
+  spend at the same time. Do not scale this service out.
 
 ### What the money control guarantees
 
@@ -39,17 +43,22 @@ Before a call, the process atomically reserves the published list price for
 that request. The reservation is refused when it would put the cycle over
 $0.15 or the UTC day of the reservation over $3. The reservation stays on that
 UTC day. A response that arrives after midnight is reconciled to the same day.
-A thrown call or an HTTP error keeps the reservation at the published list
+A refusal before the POST is sent keeps the reservation at the published list
 price. It is not refunded and it is not moved to the next day. A crash leaves
 the reservation in place.
 
-A timeout after a paid request was sent is different. The cost is `unknown`.
-The reservation stays on its UTC day and is not released. The list price is not
-booked as the final cost. New paid operations on that UTC day, and on the same
-resolution+analysis cycle, are refused until an explicit reconciliation passes
-a provider response whose `cost` converts to the recorded amount. A late
-response that arrives by itself does not clear the hold. A late body with no
-finite `cost` does not clear it either. There is no automatic release.
+After the POST is sent, a timeout, a connection reset or interrupted socket,
+an HTTP 5xx, or any other result that does not prove there was no billable
+consumption is `unknown`. An explicit cost of zero is that proof and clears
+the hold. A successful response with a finite `cost` records that cost. The
+list price is not booked as the final cost of an unknown hold.
+
+An unknown hold blocks every new paid operation on every UTC day and every
+cycle until an explicit reconciliation. Restart does not clear it, and retention
+does not delete it. A late response that arrives by itself does not clear the
+hold. A late body with no finite `cost` does not clear it either. There is no
+automatic release. Reconciliation keeps the reservation and marks it
+`reconciled`. It does not delete the record.
 
 This is not a hard invoice cap. DataForSEO can return a `cost` higher than the
 published list price for the same request. That higher amount is recorded after
@@ -61,8 +70,8 @@ pre-authorization, and leave the open-analysis switch off until that residual
 overage is an accepted risk, or keep the switch off until DataForSEO exposes a
 pre-call maximum. The switch stays false in this repository.
 
-Published list prices checked on 2026-10-20, used when a response omits `cost`
-or the call errors. This is an estimate, not a bill.
+Published list prices checked on 2026-10-20. They are the pre-send estimate,
+not a bill, and not the settlement for an unknown hold.
 
 | Call | Estimate |
 | --- | --- |
@@ -103,7 +112,7 @@ create a ledger on startup or restart.
 First use is an explicit provision, after the directory already exists:
 
 ```text
-node --experimental-transform-types scripts/provision-open-analysis-store.mjs
+node scripts/provision-open-analysis-store.mjs
 ```
 
 That command is the only path that may write a zeroed ledger. Running it again
@@ -116,6 +125,43 @@ Writes use a temp file plus rename, and a lock file. The lock is for one
 process on one host. Creating `/var/lib/trendiq` on a production host needs
 root. This repository does not create that directory. See
 `docs/PRIVATE_ALPHA_OPERATIONS.md`.
+
+Runtime is Node `>=22.7.0 <23`. `.nvmrc` pins `22.23.4`. Install with
+`pnpm install --frozen-lockfile` (see `packageManager` in `package.json`).
+
+## Reconciling an unknown hold
+
+The reconcile script does not call DataForSEO and does not edit the ledger by
+hand. Read the cost from the provider first:
+
+1. In the DataForSEO dashboard, open Billing or the API usage transactions for
+   the UTC day of the hold.
+2. Match the row by time, endpoint, and task id when the call returned one.
+   Use that row's cost in USD. Do not substitute the published list price.
+3. Build an evidence ref that identifies the row, with no line breaks, for
+   example `task:<id> date:YYYY-MM-DD` or the billing transaction id.
+4. The hold id is the key under `spendByDay.<day>.reservations` whose
+   `costState` is `unknown`.
+
+```text
+TRENDIQ_DATA_DIR=/var/lib/trendiq node scripts/reconcile-open-analysis.mjs <holdId> <providerCostUsd> "<evidenceRef>"
+```
+
+A successful run fsyncs the ledger, sets that reservation to `reconciled`,
+keeps the record, and appends one JSON line to `open-analysis-audit.log`.
+The same command again is idempotent and does not apply the cost a second
+time. The audit log is append-only.
+
+## Concurrency and recovery tests
+
+`src/server/analysis/openAnalysis/__tests__/storeLockConcurrency.test.ts` runs
+four processes against one ledger and covers a live fresh lock, a dead fresh
+lock left by a restart, and stale takeover. `spendLedgerFailClosed.test.ts`
+covers a missing directory, a missing or corrupt ledger, unknown holds across
+UTC days, post-send errors, the reconcile script, and lock identity.
+`openAnalysisLimits.test.ts` covers parallel in-process increments and a fresh
+dead-pid lock that must not be taken. `rayBanMetaUnchanged` is the describe
+name in `src/server/analysis/__tests__/rayBanMetaUnchanged.test.ts`.
 
 ## What this build does not do
 
