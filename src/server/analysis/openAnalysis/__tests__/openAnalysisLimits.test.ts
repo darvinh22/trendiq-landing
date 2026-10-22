@@ -338,6 +338,107 @@ describe("identity cache, price ttl, and analysis abstention", () => {
     expect(searches).toHaveLength(2);
   });
 
+  it("runs one provider call when two clients analyze the same product", async () => {
+    const dataDir = await readyDir();
+    const now = new Date("2026-10-21T00:00:00.000Z");
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const posts: string[] = [];
+    const collect = vi.fn(async (profile: { productId: string }) => {
+      posts.push(profile.productId);
+      await gate;
+      return {
+        productId: profile.productId,
+        searchStatus: "unavailable" as const,
+        reviewStatus: "unavailable" as const,
+        signals: [],
+        usage: { httpRequestCount: 1, paidOperationCount: 1, taskPostCount: 1 },
+      };
+    });
+    let sequence = 0;
+    const service = new OpenAnalysisService({
+      enabled: true,
+      analysisEnabled: true,
+      dataDir,
+      now: () => now,
+      idFactory: () => `analysis_${String(++sequence).padStart(8, "0")}`,
+      evidenceCollector: { collect } as unknown as AnalysisEvidenceCollector,
+      searchCandidates: async (query) => {
+        const product = OPEN_PRODUCT_BATTERY.products.find((entry) => entry.query === query);
+        if (!product) throw new Error(query);
+        return readShoppingCandidates(product.providerResponse);
+      },
+    });
+    const sony = clearProduct("sony-wh-1000xm5");
+    const resolved = await service.resolveOpenProduct({ query: sony.query, clientKey: "client-a" });
+    expect(resolved.body.status).toBe("resolved");
+    if (resolved.body.status !== "resolved") throw new Error("expected resolved");
+    const first = await service.analyzeResolution({ resolutionId: resolved.body.resolutionId, clientKey: "client-a" });
+    const second = await service.analyzeResolution({ resolutionId: resolved.body.resolutionId, clientKey: "client-b" });
+    expect(first.status).toBe("pending");
+    expect(second).toEqual(first);
+    expect(posts).toEqual([posts[0]]);
+    expect(collect).toHaveBeenCalledTimes(1);
+    release();
+    if (first.status !== "pending" || second.status !== "pending") throw new Error("expected pending");
+    const settledA = await service.waitForSettled(first.analysisId);
+    const settledB = await service.waitForSettled(second.analysisId);
+    expect(settledA.status).not.toBe("pending");
+    expect(settledB).toEqual(settledA);
+    expect(collect).toHaveBeenCalledTimes(1);
+    expect(posts).toHaveLength(1);
+  });
+
+  it("keeps one provider call when the same client retries after in-flight recovery", async () => {
+    const dataDir = await readyDir();
+    let now = new Date("2026-10-21T00:00:00.000Z");
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const posts: string[] = [];
+    const collect = vi.fn(async (profile: { productId: string }) => {
+      posts.push(profile.productId);
+      await gate;
+      return {
+        productId: profile.productId,
+        searchStatus: "unavailable" as const,
+        reviewStatus: "unavailable" as const,
+        signals: [],
+        usage: { httpRequestCount: 1, paidOperationCount: 1, taskPostCount: 1 },
+      };
+    });
+    let sequence = 0;
+    const service = new OpenAnalysisService({
+      enabled: true,
+      analysisEnabled: true,
+      dataDir,
+      now: () => now,
+      idFactory: () => `analysis_${String(++sequence).padStart(8, "0")}`,
+      evidenceCollector: { collect } as unknown as AnalysisEvidenceCollector,
+      searchCandidates: async (query) => {
+        const product = OPEN_PRODUCT_BATTERY.products.find((entry) => entry.query === query);
+        if (!product) throw new Error(query);
+        return readShoppingCandidates(product.providerResponse);
+      },
+    });
+    const sony = clearProduct("sony-wh-1000xm5");
+    const resolved = await service.resolveOpenProduct({ query: sony.query, clientKey: "client-a" });
+    expect(resolved.body.status).toBe("resolved");
+    if (resolved.body.status !== "resolved") throw new Error("expected resolved");
+    const first = await service.analyzeResolution({ resolutionId: resolved.body.resolutionId, clientKey: "client-a" });
+    expect(first.status).toBe("pending");
+    if (first.status !== "pending") throw new Error("expected pending");
+    expect(collect).toHaveBeenCalledTimes(1);
+    now = new Date(now.getTime() + 60_000);
+    const retried = await service.analyzeResolution({ resolutionId: resolved.body.resolutionId, clientKey: "client-a" });
+    expect(retried).toEqual(first);
+    expect(collect).toHaveBeenCalledTimes(1);
+    expect(posts).toHaveLength(1);
+    release();
+    const settled = await service.waitForSettled(first.analysisId);
+    expect(settled.status).not.toBe("pending");
+    expect(collect).toHaveBeenCalledTimes(1);
+  });
+
   it("enforces hourly, daily, and in-flight analysis limits without a second live run", async () => {
     const dataDir = await readyDir();
     let now = new Date("2026-10-01T00:00:00.000Z");

@@ -161,10 +161,12 @@ time. The audit log is append-only.
 ## Recovering a stale lock
 
 Do this only after the checks below. The process never deletes a lock whose
-pid is alive, and it never deletes a lock it cannot flock. A missing `flock`
-binary fails closed with `open_analysis_flock_missing` and does not clear the
-ledger or the lock. Install `flock` from util-linux. Do not delete
-`open-analysis.json` to get past that error.
+inode is held. A missing `flock` binary fails closed with
+`open_analysis_flock_missing` and does not rewrite the ledger. That attempt
+removes only the lock file it just created, and only when the pid and token
+still match. A timed-out `flock` does not remove the lock and does not drop
+a hold. Install `flock` from util-linux. Do not delete `open-analysis.json`
+to get past that error.
 
 1. Stop the single TrendIQ replica and confirm it is gone. Check the process
    list and the platform replica count. Include `node`, the container, and
@@ -182,7 +184,7 @@ ledger or the lock. Install `flock` from util-linux. Do not delete
 4. Prove the inode is not held. This open does not create the file:
 
    ```text
-   flock -n 3 true 3<"$TRENDIQ_DATA_DIR/open-analysis.json.lock"
+   flock -n 3 3<"$TRENDIQ_DATA_DIR/open-analysis.json.lock"
    ```
 
    Exit 0 means nobody holds the flock. Any other exit means it is held, or
@@ -193,11 +195,11 @@ ledger or the lock. Install `flock` from util-linux. Do not delete
    `flock -n` check above exited 0.
 6. Remove only `open-analysis.json.lock`. Do not edit or remove
    `open-analysis.json`.
-7. Append one JSON line to `open-analysis-audit.log`. Do not rewrite or
-   truncate that file:
+7. Append one JSON line to `open-analysis-audit.log`. This is append-only.
+   The command uses `>>`. Do not use `>`, and do not rewrite the file:
 
    ```text
-   {"at":"<UTC ISO time>","action":"stale_lock_removed","pid":<pid>,"token":"<token>","createdAt":"<createdAt>","inodeCheck":"flock -n acquired; lsof empty"}
+   printf '%s\n' '{"at":"<UTC ISO time>","action":"stale_lock_removed","pid":<pid>,"token":"<token>","createdAt":"<createdAt>","inodeCheck":"flock -n acquired; lsof empty"}' >> "$TRENDIQ_DATA_DIR/open-analysis-audit.log"
    ```
 
 ## Concurrency and recovery tests

@@ -8,7 +8,7 @@
  *   node scripts/open-analysis-store-worker.mjs --disturb <lockPath> <ms>
  */
 import { spawn } from "node:child_process";
-import { openSync } from "node:fs";
+import { closeSync, openSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { commitStaleSteal, releaseStoreLock, withStoreFile } from "../src/server/analysis/openAnalysis/storeFile.mjs";
 
@@ -29,22 +29,20 @@ if (mode === "--hold") {
   const ms = Number(process.argv[4]);
   if (!lockPath || !Number.isInteger(ms) || ms < 0) process.exit(1);
   const fd = openSync(lockPath, "r");
-  const child = spawn("flock", ["-x", "3", "sh", "-c", "printf ready\\n; exec cat >/dev/null"], {
-    stdio: ["pipe", "pipe", "ignore", fd],
+  const child = spawn("flock", ["-x", "3"], {
+    stdio: ["ignore", "ignore", "ignore", fd],
   });
-  await new Promise((resolve, reject) => {
-    let out = "";
-    child.stdout.on("data", (chunk) => {
-      out += chunk.toString();
-      if (out.includes("ready")) resolve();
-    });
+  const code = await new Promise((resolve, reject) => {
     child.once("error", reject);
-    child.once("exit", (code) => reject(new Error(`occupy_exit_${code}`)));
+    child.once("exit", (status) => resolve(status));
   });
+  if (code !== 0) {
+    closeSync(fd);
+    throw new Error(`occupy_exit_${code}`);
+  }
   process.stdout.write("occupied\n");
   await delay(ms);
-  child.stdin.end();
-  await new Promise((resolve) => child.once("exit", resolve));
+  closeSync(fd);
 } else if (mode === "--disturb") {
   const lockPath = process.argv[3];
   const ms = Number(process.argv[4]);

@@ -1,10 +1,11 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { closeSync, openSync } from "node:fs";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { LOCK_STALE_MS, OpenAnalysisFileStore, STORE_FILE_NAME, provisionOpenAnalysisStore, releaseStoreLock } from "../fileStore";
-import { commitStaleSteal } from "../storeFile.mjs";
+import { commitStaleSteal, holdFdLock } from "../storeFile.mjs";
 
 const tempDirs: string[] = [];
 const children: ChildProcess[] = [];
@@ -87,6 +88,27 @@ describe("open analysis lock across processes", () => {
       else process.env.PATH = previous;
     }
     expect(await readFile(ledgerPath, "utf8")).toBe(before);
+    expect(await readdir(dataDir)).not.toContain(`${STORE_FILE_NAME}.lock`);
+  });
+
+  it("times out a blocked flock helper without releasing the hold", async () => {
+    const dataDir = await readyDir();
+    const lockPath = join(dataDir, `${STORE_FILE_NAME}.lock`);
+    const body = JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString(), token: "held-inode" });
+    await writeFile(lockPath, body);
+    const holderFd = openSync(lockPath, "r");
+    const holder = await holdFdLock(holderFd, false, 1_000);
+    if (!holder) throw new Error("expected the holder to acquire the inode");
+    try {
+      const waiterFd = openSync(lockPath, "r");
+      await expect(holdFdLock(waiterFd, false, 200)).rejects.toThrow("open_analysis_store_lock_timeout");
+      closeSync(waiterFd);
+      expect(await readFile(lockPath, "utf8")).toBe(body);
+      const probe = spawnSync("flock", ["-n", "-x", lockPath, "-c", "true"]);
+      expect(probe.status).not.toBe(0);
+    } finally {
+      await holder.release();
+    }
   });
 
   it("keeps an exact counter when four processes increment together", async () => {

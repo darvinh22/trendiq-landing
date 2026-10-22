@@ -30,4 +30,9 @@ export function commitStaleSteal(
   observed: { pid?: number; createdAt?: string; token?: string }
 ): Promise<boolean>;
 export function releaseStoreLock(lock: { path: string; token: string; pid: number }): Promise<void>;
+export function holdFdLock(
+  fd: number,
+  nonblock: boolean,
+  timeoutMs?: number
+): Promise<{ release: () => Promise<void> } | null>;
 export function isEvidenceRef(value: string): boolean;
