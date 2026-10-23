@@ -6,11 +6,18 @@
  *   node scripts/open-analysis-store-worker.mjs --hold <directory> <ms>
  *   node scripts/open-analysis-store-worker.mjs --occupy <lockPath> <ms>
  *   node scripts/open-analysis-store-worker.mjs --disturb <lockPath> <ms>
+ *   node scripts/open-analysis-store-worker.mjs --recover <directory>
  */
 import { spawn } from "node:child_process";
 import { closeSync, openSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { commitStaleSteal, releaseStoreLock, withStoreFile } from "../src/server/analysis/openAnalysis/storeFile.mjs";
+import {
+  DEFAULT_JOB_DEADLINE_MS,
+  commitStaleSteal,
+  recoverExpiredPaidReservations,
+  releaseStoreLock,
+  withStoreFile,
+} from "../src/server/analysis/openAnalysis/storeFile.mjs";
 
 const day = "2026-10-21";
 const mode = process.argv[2];
@@ -67,6 +74,15 @@ if (mode === "--hold") {
       // The lock is absent between holders. That is not a failure.
     }
   }
+} else if (mode === "--recover") {
+  const directory = process.argv[3];
+  if (!directory) process.exit(1);
+  const converted = await withStoreFile(directory, { lockWaitMs: 30_000 }, (document) => {
+    return recoverExpiredPaidReservations(document, new Date(), DEFAULT_JOB_DEADLINE_MS, {
+      convertAllReserved: true,
+    });
+  });
+  process.stdout.write(`recovered ${converted.length}\n`);
 } else {
   const directory = process.argv[2];
   const count = Number(process.argv[3]);

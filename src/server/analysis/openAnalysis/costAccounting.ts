@@ -182,6 +182,8 @@ export function createAnalysisSpendTracker(options: {
         }
         try {
           const response = await replayResponse(await fetchImpl(url, init));
+          // A process exit after this POST and before markUnknown/reconcile
+          // leaves the hold `reserved`. Startup recovery converts it to unknown.
           if (estimate > 0 && paidResultIsUnknown(response)) {
             await options.ledger.markUnknown(reservation.id, reservedAt);
             spentMicros += estimate;
@@ -408,6 +410,7 @@ export function estimateOpenAnalysisSpend(): OpenAnalysisSpendEstimate {
       "Task GET polls reserve $0 and then add the response cost field when present.",
       "A refusal before the request is sent still reserves the list-price estimate so a retry cannot spend the cap twice.",
       "After the POST is sent, a timeout, connection reset, or any HTTP 5xx stays an unknown hold even when the body reports cost 0. A 4xx or 2xx cost of exactly 0 is the proof of no consumption. The unknown hold blocks every UTC day and every cycle until explicit reconciliation. It is not deleted.",
+      "A crash after the paid POST and before markUnknown or reconcile leaves the reservation reserved. The next process start converts that paid hold to unknown under the ledger lock. A paid hold that is still reserved after the job deadline is converted the same way. Restart does not delete it or clear it. The next paid call, including a repeat for the same product, is refused until scripts/reconcile-open-analysis.mjs reconciles the invoice.",
       "A call is not started unless the published list price still fits in both the resolution+analysis cycle ($0.15) and the UTC day the reservation is made ($3).",
       "Resolve and analysis share one cycle ledger. There is no separate $0.002 allowance on top of $0.15.",
       "Returned provider cost can exceed the published list price. That overage is recorded on the reservation's original UTC day and can put the cycle or the day above the limit. This is not a hard invoice cap. See docs/OPEN_ANALYSIS.md.",

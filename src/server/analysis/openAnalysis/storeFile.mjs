@@ -23,6 +23,8 @@ export const AUDIT_LOG_NAME = "open-analysis-audit.log";
  * any unlink. The lock file is never renamed. This is still one host.
  */
 export const LOCK_STALE_MS = 60_000;
+/** Same default as the open-analysis job deadline. A reserved paid hold older than this has no live job. */
+export const DEFAULT_JOB_DEADLINE_MS = 55_000;
 const USD_MICROS = 1_000_000;
 
 export class OpenAnalysisStoreError extends Error {
@@ -136,8 +138,68 @@ export async function withStoreFile(directory, options, mutator, afterWrite) {
 }
 
 /**
+ * Converts paid reservations that are still `reserved` and have no confirmed
+ * settlement into `unknown`. Does not change held micros and does not delete
+ * the record. Unknown and reconciled rows are left as they are.
+ *
+ * `convertAllReserved` is the process-start pass: no job from the previous
+ * process is still running, so every unsettled paid hold is past its deadline.
+ * Later passes convert only a hold older than `jobDeadlineMs`.
+ * A second call converts nothing more. Throws instead of writing when a paid
+ * reserved hold cannot be classified.
+ */
+export function recoverExpiredPaidReservations(document, now, jobDeadlineMs, options = {}) {
+  if (!document || typeof document !== "object" || Array.isArray(document.spendByDay) || !document.spendByDay || typeof document.spendByDay !== "object") {
+    throw new OpenAnalysisStoreError("open_analysis_recovery_failed");
+  }
+  const deadline = Number(jobDeadlineMs);
+  if (!Number.isFinite(deadline) || deadline < 0) throw new OpenAnalysisStoreError("open_analysis_recovery_failed");
+  const at = now instanceof Date ? now.getTime() : NaN;
+  if (!Number.isFinite(at)) throw new OpenAnalysisStoreError("open_analysis_recovery_failed");
+  const convertAllReserved = options?.convertAllReserved === true;
+  const cutoff = at - deadline;
+  const pending = [];
+  for (const day of Object.values(document.spendByDay)) {
+    if (!day || typeof day !== "object" || Array.isArray(day.reservations) || !day.reservations || typeof day.reservations !== "object") {
+      throw new OpenAnalysisStoreError("open_analysis_recovery_failed");
+    }
+    for (const [id, reservation] of Object.entries(day.reservations)) {
+      if (!reservation || typeof reservation !== "object" || Array.isArray(reservation)) {
+        throw new OpenAnalysisStoreError("open_analysis_recovery_failed");
+      }
+      const state = reservation.costState;
+      if (state === "unknown" || state === "reconciled") continue;
+      if (state !== undefined && state !== "reserved") throw new OpenAnalysisStoreError("open_analysis_recovery_failed");
+      if (typeof reservation.micros !== "number" || !Number.isFinite(reservation.micros) || reservation.micros < 0) {
+        throw new OpenAnalysisStoreError("open_analysis_recovery_failed");
+      }
+      if (reservation.micros === 0) continue;
+      if (typeof reservation.actualMicros === "number" || typeof reservation.reconciledAt === "string") {
+        throw new OpenAnalysisStoreError("open_analysis_recovery_failed");
+      }
+      const created = typeof reservation.createdAt === "string" ? Date.parse(reservation.createdAt) : NaN;
+      if (!Number.isFinite(created)) throw new OpenAnalysisStoreError("open_analysis_recovery_failed");
+      if (!convertAllReserved && created > cutoff) continue;
+      pending.push({ id, reservation });
+    }
+  }
+  for (const entry of pending) entry.reservation.costState = "unknown";
+  return pending.map((entry) => entry.id).sort();
+}
+
+function isUnsettledPaidReservation(reservation) {
+  if (!reservation || typeof reservation !== "object") return false;
+  if (reservation.costState !== undefined && reservation.costState !== "reserved") return false;
+  if (typeof reservation.micros !== "number" || !Number.isFinite(reservation.micros) || reservation.micros <= 0) return false;
+  if (typeof reservation.actualMicros === "number" || typeof reservation.reconciledAt === "string") return false;
+  return typeof reservation.createdAt === "string" && Number.isFinite(Date.parse(reservation.createdAt));
+}
+
+/**
  * Marks one unknown hold reconciled. Does not delete the reservation.
- * A repeat with the same evidence ref and the same micros does not apply twice.
+ * A paid hold left `reserved` by a crash is converted to `unknown` in this
+ * same locked write, then reconciled. A repeat with the same evidence ref and
+ * the same micros does not apply twice.
  * Appends one JSON line to the audit log after the ledger fsync, still under the lock.
  */
 export async function reconcileVerifiedHold(directory, input) {
@@ -151,6 +213,12 @@ export async function reconcileVerifiedHold(directory, input) {
   const actualMicros = usdToMicros(input.providerCostUsd);
   const now = input.now instanceof Date ? input.now : new Date();
   return withStoreFile(directory, { lockWaitMs: input.lockWaitMs ?? 10_000 }, (document) => {
+    const prior = findReservation(document, input.holdId);
+    const priorState = prior?.reservation?.costState ?? (prior ? "reserved" : undefined);
+    const deadline = Number.isFinite(input.jobDeadlineMs) && input.jobDeadlineMs >= 0
+      ? input.jobDeadlineMs
+      : DEFAULT_JOB_DEADLINE_MS;
+    const expired = recoverExpiredPaidReservations(document, now, deadline);
     const found = findReservation(document, input.holdId);
     if (!found) throw new Error("open_analysis_reconciliation_unverified");
     const reservation = found.reservation;
@@ -164,7 +232,13 @@ export async function reconcileVerifiedHold(directory, input) {
         actualMicros,
         dayKey: reservation.dayKey,
         evidenceRef: input.evidenceRef,
+        priorState: priorState ?? "reconciled",
+        expiredHoldIds: expired.filter((id) => id !== input.holdId),
       };
+    }
+    if (reservation.costState === "reserved" || reservation.costState === undefined) {
+      if (!isUnsettledPaidReservation(reservation)) throw new Error("open_analysis_reconciliation_unverified");
+      reservation.costState = "unknown";
     }
     if (reservation.costState !== "unknown") throw new Error("open_analysis_reconciliation_unverified");
     const held = reservation.micros;
@@ -180,8 +254,18 @@ export async function reconcileVerifiedHold(directory, input) {
       actualMicros,
       dayKey: reservation.dayKey,
       evidenceRef: input.evidenceRef,
+      priorState: priorState ?? "unknown",
+      expiredHoldIds: expired.filter((id) => id !== input.holdId),
     };
   }, async (result) => {
+    if (result.expiredHoldIds?.length) {
+      await appendAudit(directory, {
+        at: now.toISOString(),
+        action: "expire_reserved_to_unknown",
+        holdIds: result.expiredHoldIds,
+        reason: "job_deadline_exceeded",
+      });
+    }
     await appendAudit(directory, {
       at: now.toISOString(),
       action: "reconcile_verified",
@@ -191,6 +275,7 @@ export async function reconcileVerifiedHold(directory, input) {
       evidenceRef: result.evidenceRef,
       idempotent: result.idempotent,
       dayKey: result.dayKey,
+      priorState: result.priorState,
     });
   });
 }
@@ -211,6 +296,10 @@ function applyMicrosDelta(document, found, delta) {
     cycle.micros += delta;
     if (cycle.micros < 0) cycle.micros = 0;
   }
+}
+
+export async function appendStoreAudit(directory, record) {
+  await appendAudit(directory, record);
 }
 
 async function appendAudit(directory, record) {
@@ -323,6 +412,11 @@ async function recoverTemp(directory, finalPath) {
 }
 
 async function atomicWriteJson(filePath, document) {
+  // Test seam only. A set value fails the ledger write before any rename.
+  // The caller must not start a paid call. Leave this unset in production.
+  if (process.env.TRENDIQ_OPEN_ANALYSIS_LEDGER_WRITE_FAIL === "1") {
+    throw new OpenAnalysisStoreError("open_analysis_ledger_write_failed");
+  }
   const tmp = `${filePath}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
   await writeSynced(tmp, JSON.stringify(document));
   await rename(tmp, filePath);

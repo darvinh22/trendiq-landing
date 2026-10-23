@@ -2,6 +2,7 @@ export const STORE_FILE_NAME: string;
 export const PROVISION_MARKER_NAME: string;
 export const AUDIT_LOG_NAME: string;
 export const LOCK_STALE_MS: number;
+export const DEFAULT_JOB_DEADLINE_MS: number;
 
 export class OpenAnalysisStoreError extends Error {
   constructor(message: string);
@@ -9,6 +10,13 @@ export class OpenAnalysisStoreError extends Error {
 
 export function provisionStore(directory: string, now?: Date): Promise<"created" | "unchanged">;
 export function readStoreDocument(directory: string): Promise<Record<string, any>>;
+export function recoverExpiredPaidReservations(
+  document: { spendByDay: Record<string, unknown> },
+  now: Date,
+  jobDeadlineMs: number,
+  options?: { convertAllReserved?: boolean }
+): string[];
+export function appendStoreAudit(directory: string, record: Record<string, unknown>): Promise<void>;
 export function withStoreFile<T>(
   directory: string,
   options: { lockWaitMs?: number },
@@ -23,6 +31,7 @@ export function reconcileVerifiedHold(
     evidenceRef: string;
     now?: Date;
     lockWaitMs?: number;
+    jobDeadlineMs?: number;
   }
 ): Promise<{ idempotent: boolean; actualMicros: number; dayKey: string; evidenceRef: string }>;
 export function commitStaleSteal(

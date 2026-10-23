@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 /**
- * Reconcile one unknown open-analysis hold from an operator-supplied provider cost.
+ * Reconcile one open-analysis hold from an operator-supplied provider cost.
  *
- * Does not contact DataForSEO. Does not edit the ledger by hand. Reads
- * TRENDIQ_DATA_DIR and appends one line to open-analysis-audit.log.
+ * Accepts an unknown hold, including one startup recovery converted from
+ * reserved. A paid hold still reserved after a crash is converted to unknown
+ * under the same lock and then reconciled. Does not contact DataForSEO. Does
+ * not edit the ledger by hand. Reads TRENDIQ_DATA_DIR and appends one line to
+ * open-analysis-audit.log.
  *
  *   TRENDIQ_DATA_DIR=/var/lib/trendiq node scripts/reconcile-open-analysis.mjs <holdId> <providerCostUsd> <evidenceRef>
  *
@@ -29,11 +32,21 @@ if (!/^\d+(?:\.\d+)?$/.test(costArg)) {
   process.exit(1);
 }
 
+function configuredJobDeadlineMs() {
+  const raw = process.env.TRENDIQ_ANALYSIS_JOB_DEADLINE_MS;
+  if (raw === undefined || raw.trim() === "") return undefined;
+  if (!/^\d+$/.test(raw.trim())) return undefined;
+  const parsed = Number(raw.trim());
+  if (!Number.isSafeInteger(parsed) || parsed < 1_000 || parsed > 120_000) return undefined;
+  return parsed;
+}
+
 try {
   const result = await reconcileVerifiedHold(directory, {
     holdId,
     providerCostUsd: Number(costArg),
     evidenceRef,
+    jobDeadlineMs: configuredJobDeadlineMs(),
   });
   console.log(result.idempotent ? "already reconciled; counters unchanged" : "reconciled unknown hold");
 } catch (error) {
