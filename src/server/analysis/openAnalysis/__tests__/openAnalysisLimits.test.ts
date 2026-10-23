@@ -128,7 +128,9 @@ describe("open analysis spend caps", () => {
     expect(blocked).toEqual({ ok: false, micros: 0, reason: "unknown_cost" });
   });
 
-  it("blocks a resolve when the daily file counter is already $3", async () => {
+  it("blocks a resolve when the daily file counter is already $1", async () => {
+    expect(OPEN_ANALYSIS_DAILY_MAX_MICROS).toBe(1_000_000);
+    expect(OPEN_ANALYSIS_MAX_MICROS).toBe(150_000);
     const dataDir = await readyDir();
     const now = new Date("2026-10-21T12:00:00.000Z");
     const store = new OpenAnalysisFileStore(dataDir, { now: () => now });
@@ -157,6 +159,62 @@ describe("open analysis spend caps", () => {
     const result = await service.resolveOpenProduct({ query: "Sony WH-1000XM5" });
     expect(result).toEqual({ statusCode: 503, body: { status: "unavailable", reason: "daily_capacity_reached" } });
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("keeps a reservation that lands on $1 and refuses the next micro", async () => {
+    expect(OPEN_ANALYSIS_DAILY_MAX_MICROS).toBe(1_000_000);
+    expect(OPEN_ANALYSIS_MAX_MICROS).toBe(150_000);
+    const dataDir = await readyDir();
+    const now = new Date("2026-10-21T12:00:00.000Z");
+    const store = new OpenAnalysisFileStore(dataDir, { now: () => now });
+    await store.update((document) => {
+      document.spendByDay["2026-10-21"] = {
+        micros: OPEN_ANALYSIS_DAILY_MAX_MICROS - OPEN_ANALYSIS_MAX_MICROS,
+        reservations: {},
+        analysisCount: 0,
+        paidOperationCount: 0,
+      };
+    });
+    const ledger = new FileSpendLedger(store);
+    const fitted = await ledger.reserve(OPEN_ANALYSIS_MAX_MICROS, now, { cycleId: "cycle_fill_day" });
+    expect(fitted.ok).toBe(true);
+    expect(fitted.micros).toBe(OPEN_ANALYSIS_MAX_MICROS);
+    expect((await store.read()).spendByDay["2026-10-21"]?.micros).toBe(1_000_000);
+
+    const over = await ledger.reserve(1, now, { cycleId: "cycle_over_day" });
+    expect(over).toEqual({ ok: false, micros: 0, reason: "daily" });
+    const afterOver = await store.read();
+    expect(afterOver.spendByDay["2026-10-21"]?.micros).toBe(1_000_000);
+    expect(Object.keys(afterOver.spendByDay["2026-10-21"]?.reservations ?? {})).toHaveLength(1);
+
+    const shortDir = await readyDir();
+    const shortStore = new OpenAnalysisFileStore(shortDir, { now: () => now });
+    await shortStore.update((document) => {
+      document.spendByDay["2026-10-21"] = {
+        micros: OPEN_ANALYSIS_DAILY_MAX_MICROS - 1_999,
+        reservations: {},
+        analysisCount: 0,
+        paidOperationCount: 0,
+      };
+    });
+    const shortFetch = vi.fn<FetchLike>(async () => {
+      throw new Error("must_not_fetch");
+    });
+    const shortService = new OpenAnalysisService({
+      enabled: true,
+      analysisEnabled: true,
+      dataDir: shortDir,
+      now: () => now,
+      fetchImpl: shortFetch,
+      apiBaseUrl: "https://fixture.invalid",
+      login: "fixture-login",
+      password: "fixture-password",
+      liveConfigured: true,
+    });
+    const blocked = await shortService.resolveOpenProduct({ query: "Sony WH-1000XM5" });
+    expect(blocked).toEqual({ statusCode: 503, body: { status: "unavailable", reason: "daily_capacity_reached" } });
+    expect(shortFetch).not.toHaveBeenCalled();
+    expect((await shortStore.read()).spendByDay["2026-10-21"]?.micros).toBe(OPEN_ANALYSIS_DAILY_MAX_MICROS - 1_999);
   });
 
   it("keeps a failed call's estimate after a new store instance reads the file", async () => {

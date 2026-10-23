@@ -177,8 +177,11 @@ describe("open product battery v1", () => {
     expect(estimate.analysisTypicalUsd).toBe(0.1232);
     expect(estimate.fullCycleTypicalUsd).toBe(0.1252);
     expect(estimate.perAnalysisCapUsd).toBe(0.15);
-    expect(estimate.dailyCapUsd).toBe(3);
-    expect(estimate.maxFullCyclesPerDayAtTypicalCost).toBe(23);
+    expect(estimate.dailyCapUsd).toBe(1);
+    expect(estimate.maxFullCyclesPerDayAtTypicalCost).toBe(7);
+    expect(estimate.notes).toContain(
+      "A call is not started unless the published list price still fits in both the resolution+analysis cycle ($0.15) and the UTC day the reservation is made ($1).",
+    );
   });
 });
 

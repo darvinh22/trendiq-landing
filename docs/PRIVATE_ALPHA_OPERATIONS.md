@@ -286,7 +286,7 @@ call `markUnknown` or in-process `reconcile` after the script. In-process
 ## Persistent unknown-cost blocks
 
 An unresolved unknown cost keeps blocking paid calls. The caller sees
-`daily_capacity_reached`. The $3 day cap and the $0.15 cycle cap use that
+`daily_capacity_reached`. The $1 day cap and the $0.15 cycle cap use that
 same reason. Read the ledger. Do not raise a cap. Restart, retention, a late
 response with no finite cost, and a second provision do not clear the hold.
 Do not delete or hand-edit `open-analysis.json`.

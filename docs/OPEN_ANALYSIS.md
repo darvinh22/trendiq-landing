@@ -24,7 +24,7 @@ All provider calls, errors, and retries count. Resolve and analysis share one
 cycle ledger. There is no separate identity allowance on top of the cycle limit.
 
 - $0.15 maximum for one resolution plus its analysis.
-- $3 maximum for one UTC day.
+- $1 maximum for one UTC day, aligned with the proposed DataForSEO external daily expenses limit of USD 1.00.
 - 100 name resolutions per UTC day, 5 analyses per client per hour, 20 per
   client per day, and one analysis in flight per client.
 - This deployment is one Node process and one replica. The file lock is the
@@ -44,7 +44,7 @@ cycle ledger. There is no separate identity allowance on top of the cycle limit.
 
 Before a call, the process atomically reserves the published list price for
 that request. The reservation is refused when it would put the cycle over
-$0.15 or the UTC day of the reservation over $3. The reservation stays on that
+$0.15 or the UTC day of the reservation over $1. The reservation stays on that
 UTC day. A response that arrives after midnight is reconciled to the same day.
 A refusal before the POST is sent keeps the reservation at the published list
 price. It is not refunded and it is not moved to the next day. A crash after
@@ -107,7 +107,7 @@ not a bill, and not the settlement for an unknown hold.
 | Shopping reviews at recent depth 200 | $0.03 |
 
 A typical full cycle is about $0.1252, including the $0.002 identity task.
-At that estimate the $3 day cap allows 23 full cycles. Ads search volume is
+At that estimate the $1 day cap allows 7 full cycles. Ads search volume is
 most of the cost. The code records the same figures from
 `estimateOpenAnalysisSpend()`.
 
@@ -340,7 +340,7 @@ back to `unknown` even after that.
 
 An unresolved unknown cost keeps blocking paid calls. Callers get
 `daily_capacity_reached` (HTTP 503), including a repeat for the same product
-and including the next UTC day. The $0.15 cycle cap and the $3 day cap use
+and including the next UTC day. The $0.15 cycle cap and the $1 day cap use
 that same reason. Read the ledger before deciding which one it is. Do not
 raise either cap.
 

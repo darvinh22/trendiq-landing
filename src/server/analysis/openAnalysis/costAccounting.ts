@@ -9,10 +9,10 @@ import {
 import { ProviderExecutionError } from "../../../app/lib/data/capabilities/types";
 import type { FetchLike } from "../../../app/lib/data/search/client";
 
-/** Integer millionths of a US dollar. $0.15 is 150_000 micros. */
+/** Integer millionths of a US dollar. $0.15 is 150_000 micros. $1.00 is 1_000_000 micros. */
 export const USD_MICROS = 1_000_000;
 export const OPEN_ANALYSIS_MAX_MICROS = 150_000;
-export const OPEN_ANALYSIS_DAILY_MAX_MICROS = 3_000_000;
+export const OPEN_ANALYSIS_DAILY_MAX_MICROS = 1_000_000;
 
 /**
  * Published list prices checked on 2026-10-20. These are estimates used only
@@ -411,7 +411,7 @@ export function estimateOpenAnalysisSpend(): OpenAnalysisSpendEstimate {
       "A refusal before the request is sent still reserves the list-price estimate so a retry cannot spend the cap twice.",
       "After the POST is sent, a timeout, connection reset, or any HTTP 5xx stays an unknown hold even when the body reports cost 0. A 4xx or 2xx cost of exactly 0 is the proof of no consumption. The unknown hold blocks every UTC day and every cycle until explicit reconciliation. It is not deleted.",
       "A crash after the paid POST and before markUnknown or reconcile leaves the reservation reserved. The next process start converts that paid hold to unknown under the ledger lock. A paid hold that is still reserved after the job deadline is converted the same way. Restart does not delete it or clear it. The next paid call, including a repeat for the same product, is refused until scripts/reconcile-open-analysis.mjs reconciles the invoice.",
-      "A call is not started unless the published list price still fits in both the resolution+analysis cycle ($0.15) and the UTC day the reservation is made ($3).",
+      "A call is not started unless the published list price still fits in both the resolution+analysis cycle ($0.15) and the UTC day the reservation is made ($1).",
       "Resolve and analysis share one cycle ledger. There is no separate $0.002 allowance on top of $0.15.",
       "Returned provider cost can exceed the published list price. That overage is recorded on the reservation's original UTC day and can put the cycle or the day above the limit. This is not a hard invoice cap. See docs/OPEN_ANALYSIS.md.",
       "Google Ads live is also documented at 12 requests per minute per account. This process does not try to exceed that.",
