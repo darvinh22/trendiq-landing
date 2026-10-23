@@ -50,11 +50,17 @@ A refusal before the POST is sent keeps the reservation at the published list
 price. It is not refunded and it is not moved to the next day. A crash after
 the reservation is written, including a crash after the paid POST and before
 the cost is marked unknown or reconciled, leaves that reservation `reserved`.
+The row does not record whether the POST was sent. A crash after `reserve`
+and before `fetch` leaves the same paid `reserved` shape. See "Reserved holds
+do not show whether the POST was sent".
 
-The next locked ledger read converts a paid reservation that is still
-`reserved` and has no confirmed settlement into `unknown` when its job can no
-longer be running. On the first locked read after process start, that is every
-such reservation: the previous process and its deadline timer are gone. While
+The next locked ledger operation on `OpenAnalysisFileStore` converts a paid
+reservation that is still `reserved` and has no confirmed settlement into
+`unknown` when its job can no longer be running. On the first locked
+operation after process start, that is every such reservation: the previous
+process and its deadline timer are gone. The server performs that operation
+only when `TRENDIQ_OPEN_ANALYSIS_ENABLED` is the exact string `true`. While
+the switch is false, process start does not convert the holds. While
 this process stays up, the same conversion runs once the reservation is older
 than the job deadline (55 seconds unless `TRENDIQ_ANALYSIS_JOB_DEADLINE_MS`
 is set). The write is atomic under the existing file lock. It does not change
@@ -161,16 +167,20 @@ hand. Read the cost from the provider first:
    Use that row's cost in USD. Do not substitute the published list price.
 3. Build an evidence ref that identifies the row, with no line breaks, for
    example `task:<id> date:YYYY-MM-DD` or the billing transaction id.
-4. The hold id is the key under `spendByDay.<day>.reservations`. Recovery
-   converts an orphaned paid `reserved` hold to `unknown`. The script resolves
-   that converted hold. If you run it before the process has done that
-   conversion, it converts that named paid `reserved` hold under the lock and
-   then reconciles it, including when the hold is younger than the job
-   deadline. Other paid `reserved` holds are converted only after the job
-   deadline. The script reads `TRENDIQ_ANALYSIS_JOB_DEADLINE_MS` when that
-   value is a whole number from 1000 to 120000. Otherwise the deadline is 55
-   seconds. A reconciled hold with the same evidence ref and the same micros
-   is left unchanged. Any other state is refused.
+4. The hold id is the key under `spendByDay.<day>.reservations`. Do not run
+   the script while that hold's job is still running. Recovery converts an
+   orphaned paid `reserved` hold to `unknown`. The script resolves that
+   converted hold. `reconcileVerifiedHold` in
+   `src/server/analysis/openAnalysis/storeFile.mjs` also converts the named
+   paid `reserved` hold under the lock and then reconciles it when you run
+   the script first, including when the hold is younger than the job
+   deadline. That allowance is not an operator procedure. See "Do not
+   reconcile a running job". Other paid `reserved` holds are converted only
+   after the job deadline. The script reads
+   `TRENDIQ_ANALYSIS_JOB_DEADLINE_MS` when that value is a whole number from
+   1000 to 120000. Otherwise the deadline is 55 seconds. A reconciled hold
+   with the same evidence ref and the same micros is left unchanged. Any
+   other state is refused.
 
 ```text
 TRENDIQ_DATA_DIR=/var/lib/trendiq node scripts/reconcile-open-analysis.mjs <holdId> <providerCostUsd> "<evidenceRef>"
@@ -181,7 +191,226 @@ keeps the record, and appends one JSON line to `open-analysis-audit.log`.
 The same command again is idempotent and does not apply the cost a second
 time. The audit log is append-only. A startup conversion also appends one
 line, `expire_reserved_to_unknown`, and does not append it again when recovery
-finds nothing left to convert.
+finds nothing left to convert. Reconcile every hold id on that line. See
+"After restart" and "Persistent unknown-cost blocks".
+
+## Drain before every deploy
+
+F1, required before activation. Do this before every deploy and before every
+restart of the one replica, including a configuration restart. Finish with no
+paid hold still `reserved`. `TRENDIQ_OPEN_ANALYSIS_ENABLED` stays false in
+this repository. This section does not turn it on and does not change spend
+caps.
+
+1. Turn open analysis off for the next process. Set
+   `TRENDIQ_OPEN_ANALYSIS_ENABLED` false in the configuration that process
+   will start with. Only the exact string `true` enables it. The running
+   process already read the variable at startup. Changing the variable does
+   not stop that process. Restarting so the new value applies is the restart
+   this drain exists to prepare. Leave this replica up.
+2. Stop new requests that can reach Node. That includes
+   `POST /api/product-resolve` and an open-analysis analyze call. Close the
+   password gate and any direct-origin URL. Work already running inside the
+   process keeps running until it settles.
+3. Wait until no paid hold is still reserved. A paid hold has `micros`
+   greater than 0, `costState` of `reserved` or absent, and no `actualMicros`
+   or `reconciledAt`. A reservation with `micros` of 0 is not a paid hold.
+   Startup recovery does not convert it and it does not block new paid calls.
+   After the last accepted request, wait at least the job deadline (55
+   seconds, or `TRENDIQ_ANALYSIS_JOB_DEADLINE_MS` when that value is a whole
+   number from 1000 to 120000). Then run the read-only check below.
+   `pendingPaidReserved`, `pendingJobs`, and `inFlight` must all be empty
+   before the termination signal.
+4. Do not use `TRENDIQ_ANALYSIS_ENABLED=false` followed by a restart as the
+   drain. That restart converts every unsettled paid `reserved` hold. If a
+   paid hold is still `reserved` past the deadline while this process stays
+   up, the next locked ledger read converts it to `unknown` with reason
+   `job_deadline_exceeded` and paid calls block. That is not a finished
+   drain. Follow "Persistent unknown-cost blocks". Do not restart to clear
+   it.
+
+## Verify pending reservations before restart
+
+Read the ledger immediately before the termination signal. This does not take
+the store lock and does not write. Do not edit `open-analysis.json`. A read
+taken while new requests are still arriving is not proof.
+
+```text
+TRENDIQ_DATA_DIR=/var/lib/trendiq node --input-type=module <<'EOF'
+import { readFile } from "node:fs/promises";
+const doc = JSON.parse(await readFile(process.env.TRENDIQ_DATA_DIR + "/open-analysis.json", "utf8"));
+const pendingPaidReserved = [];
+const unknown = [];
+for (const [day, spend] of Object.entries(doc.spendByDay ?? {})) {
+  for (const [id, reservation] of Object.entries(spend.reservations ?? {})) {
+    const state = reservation.costState ?? "reserved";
+    if (state === "unknown") {
+      unknown.push({ day, id, micros: reservation.micros, createdAt: reservation.createdAt, cycleId: reservation.cycleId });
+    }
+    if (reservation.micros > 0 && state === "reserved" && reservation.actualMicros == null && !reservation.reconciledAt) {
+      pendingPaidReserved.push({ day, id, micros: reservation.micros, createdAt: reservation.createdAt, cycleId: reservation.cycleId });
+    }
+  }
+}
+const pendingJobs = Object.entries(doc.jobs ?? {})
+  .filter(([, job]) => job && job.status === "pending")
+  .map(([id, job]) => ({ id, createdAt: job.createdAt }));
+const inFlight = Object.entries(doc.clients ?? {})
+  .filter(([, client]) => client && client.inFlightAnalysisId)
+  .map(([client, value]) => ({ client, inFlightAnalysisId: value.inFlightAnalysisId, inFlightSince: value.inFlightSince }));
+console.log(JSON.stringify({ pendingPaidReserved, unknown, pendingJobs, inFlight }, null, 2));
+EOF
+```
+
+Hold ids are the keys under `spendByDay.<UTC day>.reservations`. They are not
+stored on `jobs`.
+
+- `pendingPaidReserved` must be empty. If it is not, the drain is unfinished.
+  Do not restart.
+- `pendingJobs` and `inFlight` must be empty. A pending job may still be
+  between reserve and settle.
+- `unknown` may be non-empty. Restart does not clear those holds, and paid
+  calls stay blocked until each one is reconciled. Treat that list as
+  persistent-block work, not as a reason to restart.
+
+## After restart
+
+The first locked `OpenAnalysisFileStore` operation of a server process
+converts every paid hold that is still `reserved` and has no confirmed
+settlement into `unknown`. It passes `convertAllReserved`. The reconcile
+script does not. That script converts other paid `reserved` holds only after
+the job deadline, and it settles the named hold even when the hold is
+younger. The server conversion does not change the held amount and it does
+not delete the record. It appends one JSON line to
+`$TRENDIQ_DATA_DIR/open-analysis-audit.log`:
+
+```text
+{"at":"<UTC ISO time>","action":"expire_reserved_to_unknown","holdIds":["<holdId>"],"reason":"process_startup"}
+```
+
+A later conversion while that same process stays up uses
+`"reason":"job_deadline_exceeded"`. The reconcile script can append the same
+action for other holds older than the job deadline. Another pass appends
+nothing when nothing remains to convert.
+
+After restart, read the audit log and reconcile every hold id on every new
+`expire_reserved_to_unknown` line. Use
+`scripts/reconcile-open-analysis.mjs` and the invoice cost for that hold. Do
+not skip an id. Do not hand-edit the ledger.
+
+```text
+grep expire_reserved_to_unknown "$TRENDIQ_DATA_DIR/open-analysis-audit.log"
+```
+
+The server appends `process_startup` on the first locked
+`OpenAnalysisFileStore` operation of that process. It constructs that store
+only when `TRENDIQ_OPEN_ANALYSIS_ENABLED` is the exact string `true`. A
+read-only look at `open-analysis.json`, including the check above, does not
+append the line and does not convert holds. While the switch is false,
+restart alone does not append the line and does not convert the holds. Still
+read the ledger. A paid `reserved` hold left by a restart mid-job has to be
+reconciled before paid calls can resume. The next process that runs a locked
+store operation converts it and appends the audit line.
+
+## Do not reconcile a running job
+
+Never run `scripts/reconcile-open-analysis.mjs` for a hold whose job is still
+running.
+
+`reconcileVerifiedHold` in `src/server/analysis/openAnalysis/storeFile.mjs`
+allows it. Operators must not. `recoverExpiredPaidReservations` converts a
+paid `reserved` hold only after the job deadline, unless the process-start
+pass sets `convertAllReserved`. The reconcile path does not set
+`convertAllReserved`. It still settles the named hold when `costState` is
+`reserved` or absent, including when `createdAt` is younger than the
+deadline. It sets `costState` to `unknown` and reconciles in the same locked
+write. There is no check that a job is in flight.
+
+Treat the job as still running while this replica is up and any of these are
+true: `pendingJobs` is non-empty, `inFlight` is non-empty, or the hold is a
+paid `reserved` row younger than the job deadline. Wait until that process
+settles the work, or until the replica has stopped after a completed drain.
+A live job can still call `markUnknown` or the in-process `reconcile` after
+the script returns. In-process `reconcile` ignores an `unknown` hold, and
+otherwise deletes the reservation and applies another micros delta, including
+when the script already set `reconciled`. `markUnknown` sets `costState`
+back to `unknown` even after that.
+
+## Persistent unknown-cost blocks
+
+An unresolved unknown cost keeps blocking paid calls. Callers get
+`daily_capacity_reached` (HTTP 503), including a repeat for the same product
+and including the next UTC day. The $0.15 cycle cap and the $3 day cap use
+that same reason. Read the ledger before deciding which one it is. Do not
+raise either cap.
+
+A hold blocks when `costState` is `unknown`, or when it is a paid reservation
+still `reserved` with no confirmed settlement once the job deadline has
+passed. Restart does not clear it. Retention does not delete a day that still
+has an `unknown` reservation. A late body with no finite `cost` does not
+clear it. Provision does not reset counters. Do not delete
+`open-analysis.json`. Do not edit it by hand.
+
+1. Stop new open-analysis requests. Confirm no job is still running for the
+   holds you will reconcile.
+2. List every `unknown` reservation and every id in
+   `expire_reserved_to_unknown`.
+3. For each id, open DataForSEO billing or API usage for that reservation's
+   UTC day (`dayKey` or `createdAt`). Match time, endpoint, and task id when
+   one was returned.
+4. If a row matches, pass that row's USD cost. Do not substitute the published
+   list price.
+5. If no row matches, reconcile at `0`. Do that only when the invoice has no
+   charge for the hold. Put that fact in the evidence ref, for example
+   `no-invoice-row hold:<holdId> date:YYYY-MM-DD`. A real charge reconciled
+   at `0` understates spend.
+6. Run this once per hold. The script does not call DataForSEO:
+
+```text
+TRENDIQ_DATA_DIR=/var/lib/trendiq node scripts/reconcile-open-analysis.mjs <holdId> <providerCostUsd> "<evidenceRef>"
+```
+
+7. Read the ledger again. Each of those holds is `reconciled`. No `unknown`
+   row remains, and no paid `reserved` hold is past the deadline. The same
+   command with the same evidence ref and the same cost does not apply twice.
+   `open_analysis_reconciliation_unverified` means stop. Do not guess another
+   cost.
+8. Paid calls stay blocked until every such hold is reconciled. Leave
+   `TRENDIQ_OPEN_ANALYSIS_ENABLED` false until that is true and the gate 2
+   checklist below passes.
+
+## Reserved holds do not show whether the POST was sent
+
+`reserve` writes the hold before `fetch`. The reservation does not store
+whether the paid POST was handed to DataForSEO. A crash after `reserve` and
+before the POST, and a crash after the POST and before `markUnknown` or
+`reconcile`, leave the same paid `reserved` row: `micros` greater than 0, no
+`actualMicros`, no `reconciledAt`. `micros` is the published list-price
+estimate in both cases. Startup recovery cannot tell them apart. With
+`convertAllReserved`, the first locked read converts both and appends
+`expire_reserved_to_unknown` with reason `process_startup`.
+
+Every restart that interrupts a job can leave that row and can need a manual
+reconcile. Match the invoice. Use `0` when the invoice has no charge. Use the
+row's USD cost when it does. Do not infer "POST never sent" from a short
+crash, and do not infer "POST sent" from the list-price `micros`.
+
+## Gate 2 checklist
+
+Do not set `TRENDIQ_OPEN_ANALYSIS_ENABLED=true` until this checklist passes
+on the host. The default in this repository stays false.
+
+- `TRENDIQ_OPEN_ANALYSIS_LEDGER_WRITE_FAIL` must never be set in production.
+  It is not in `.env.example`. The only reader is `atomicWriteJson` in
+  `src/server/analysis/openAnalysis/storeFile.mjs`. The value `1` throws
+  `open_analysis_ledger_write_failed` before the ledger temp file is renamed.
+  That path is a test seam. The variable must be absent from the service
+  environment, from platform secrets, and from any shell that runs the server,
+  provision, or reconcile. Do not set it to pause spending.
+- `/var/lib/trendiq` exists, the ledger has been provisioned, and exactly one
+  replica uses that `TRENDIQ_DATA_DIR`.
+- No `unknown` hold is outstanding, and no paid `reserved` hold is past its
+  deadline, or each of those holds has been reconciled from the invoice.
 
 ## Recovering a stale lock
 
